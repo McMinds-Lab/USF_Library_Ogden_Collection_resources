@@ -386,8 +386,8 @@ server <- function(input, output, session) {
   output$renderPhoto <- renderUI({
     if(!anyNA(a$file)) {
       imageOutput("current_photo",
-                 click = "photo_click",
-                 brush = brushOpts(id = "photo_brush", resetOnNew = TRUE)
+                  click = "photo_click",
+                  brush = brushOpts(id = "photo_brush", resetOnNew = TRUE)
       )
     }
   })
@@ -407,5 +407,11 @@ server <- function(input, output, session) {
 shinyApp(ui, server)
 
 #to deploy to static site:
-# shinylive::export("shiny_annotation", "cnidae_gritty_photo_annotator", template_params = list(title = cnidae_gritty_photo_annotator))
+# shinylive::export("shiny_annotation", "photo_annotator", template_params = list(title = 'Photo Annotator'))
+#then add to top of index.html:
+#---
+#title: Photo Annotator
+#permalink: /photo_annotator/
+#---
+
 # consider more flexible drawing tools and zooming eg. https://stackoverflow.com/questions/65347690/how-do-i-save-adddrawtoolbar-shapes-drawn-in-an-r-leaflet-shiny-map-so-i-can-re
