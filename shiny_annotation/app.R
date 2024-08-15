@@ -3,8 +3,13 @@
 ##
 
 library(shiny)
-library(shinyFiles)
-library(mime)
+
+# Workaround for Chromium Issue 468227
+downloadButton <- function(...) {
+ tag <- shiny::downloadButton(...)
+ tag$attribs$download <- NULL
+ tag
+}
 
 ui <- fluidPage(
   titlePanel("Cnidae Gritty Photo Annotations"),
@@ -52,23 +57,14 @@ server <- function(input, output, session) {
   })
         
   # Create observers for filepath buttons
-  roots <- c(home = '~', getVolumes()())
-  shinyFileChoose(input, 'vocabulary',  roots=roots)
-  shinyDirChoose(input,  'dir',         roots=roots, allowDirCreate = FALSE)
-  shinyFileChoose(input, 'resume_file', roots=roots)
-  shinyFileSave(input,   'save_file',   roots=roots)
+  #roots <- c(home = '~', getVolumes()())
+  #shinyFileSave(input,   'save_file',   roots=roots)
 
   # Define variables that will contain global information
-  r <- reactiveValues(vfn             = NULL,
-                      vocab           = NULL,
-                      dir             = NULL,
-                      files           = NULL,
-                      photos          = NULL,
+  r <- reactiveValues(vocab           = NULL,
                       photos_not_done = NULL,
-                      old_annotations_file = NULL,
                       old_annotations      = NULL,
                       annotations = NULL,
-                      save_file   = NULL,
                       messages    = NULL,
                       metadata    = list(annotator_id = NA,
                                          session_start_time = NA))
@@ -77,6 +73,7 @@ server <- function(input, output, session) {
   a <- reactiveValues(i          = 1,
                       unasked    = NULL, 
                       answers    = list(),
+                      file       = NA,
                       metadata   = list(filename = NA,
                                         photo_annotation_start = NA))
   
@@ -159,13 +156,13 @@ server <- function(input, output, session) {
     # Check if all remaining questions are inapplicable
     if(length(a$unasked) == 0 || all_inapplicable) {
       
-      if(a$i < length(r$photos_not_done)) {
+      if(a$i < nrow(r$photos_not_done)) {
         
         output$question_ui <- renderUI({
           list(
             renderText({"Structured questions finished - finish notes and click Next, Save, or Reset\n"}),
             actionButton("next_photo", "Next photo"),
-            shinySaveButton('save_file', 'Save data', 'Save file as...')
+            downloadButton("save_file", "Save data")
           )
         })
         
@@ -174,7 +171,7 @@ server <- function(input, output, session) {
         output$question_ui <- renderUI({
           list(
             renderText({"All photos finished - Finish notes and click Save or Reset\n"}),
-            shinySaveButton('save_file', 'Save data', 'Save file as...')
+            downloadButton("save_file", "Save data")
           )
         })
         
@@ -212,7 +209,7 @@ server <- function(input, output, session) {
       r$metadata$annotator_id <- input$aid
       
       output$setup_ui <- renderUI({
-        shinyFilesButton('vocabulary', 'Select a file with vocabulary', 'Please select a file', FALSE)
+        fileInput("vocabulary", "Select a file with vocabulary")
       })
       
       # Retrieve info when the vocabulary file button is used
@@ -220,31 +217,25 @@ server <- function(input, output, session) {
         
         if(!is.integer(input$vocabulary)) {
           
-          r$vfn <- parseFilePaths(roots, input$vocabulary)$datapath
-          r$vocab <- read.table(r$vfn, header = TRUE, sep = '\t')
+          r$vocab <- read.table(input$vocabulary$datapath, header = TRUE, sep = '\t')
           r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + nrow(r$vocab), nrow = 0)), 
                                     c(names(r$metadata), names(a$metadata), r$vocab$key))
           
           output$setup_ui <- renderUI({
-              shinyDirButton('dir', 'Select a folder to annotate', 'Please select a folder', FALSE)
+              fileInput("photos", "Select a set of files to annotate", multiple = TRUE, accept = 'image/*')
           })
           
           # Retrieve info when the annotation folder button is used
-          observeEvent(input$dir, {
+          observeEvent(input$photos, {
             
             # event is triggered when clicking the button (inputting integer), but we don't want to move on until a directory is chosen (no longer integer)
-            if(!is.integer(input$dir)) {
+            if(!is.integer(input$photos)) {
             
-              r$dir <- parseDirPath(roots, input$dir)
-              r$files <- list.files(r$dir, full.names = TRUE)
-              # Filter files by MIME type to ensure they are images
-              r$photos <- r$files[startsWith(mime::guess_type(r$files), "image/")]
-              
-              if(length(r$photos) > 0) {
+              if(nrow(input$photos) > 0) {
                 
                 output$setup_ui <- renderUI({
                   list(
-                    shinyFilesButton('resume_file', 'Select a previous annotations file', 'Please select a file', FALSE),
+                    fileInput("resume_file", "Select a previous annotations file"),
                     actionButton("begin", "Begin")
                   )
                 })
@@ -254,8 +245,7 @@ server <- function(input, output, session) {
                   
                   if(!is.integer(input$resume_file)) {
     
-                    r$old_annotations_file <- parseFilePaths(roots, input$resume_file)$datapath
-                    r$old_annotations <- read.table(r$old_annotations_file, header = TRUE, sep = '\t')
+                    r$old_annotations <- read.table(input$resume_file$datapath, header = TRUE, sep = '\t')
                   
                   }
     
@@ -264,13 +254,14 @@ server <- function(input, output, session) {
                 # Declare that input files are finished, and begin
                 observeEvent(input$begin, {
                   
-                  if(!is.null(r$old_annotations_file)) {
-                    r$photos_not_done <- r$photos[!r$photos %in% r$old_annotations$filename]
+                  if(!is.null(input$resume_file$datapath)) {
+                    r$photos_not_done <- input$photos[!input$photos$name %in% r$old_annotations$filename,]
                   } else {
-                    r$photos_not_done <- r$photos
+                    r$photos_not_done <- input$photos
                   }
               
-                  a$metadata$filename <- r$photos_not_done[[1]]
+                  a$file <- r$photos_not_done[1,]
+                  a$metadata$filename <- a$file$name
     
                   initialize_photo()
                   
@@ -284,11 +275,11 @@ server <- function(input, output, session) {
                   output$setup_info <- renderText({
                     
                     paste0(
-                      'Vocabulary file (', nrow(r$vocab), ' questions): ', r$vfn, '\n',
-                      'Photo directory (', length(r$photos), ' photos): ', r$dir, '\n',
-                      ifelse(is.null(r$old_annotations_file), 
+                      'Vocabulary file (', nrow(r$vocab), ' questions): ', input$vocabulary$name, '\n',
+                      nrow(input$photos), ' photos\n',
+                      ifelse(is.null(input$resume_file$datapath), 
                              'No old annotations - starting from scratch!\n', 
-                             paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', r$old_annotations_file, '\n', length(r$photos) - nrow(r$old_annotations), ' new photos\n'))
+                             paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', input$resume_file$name, '\n', nrow(input$photos) - nrow(r$old_annotations), ' new photos\n'))
                     )
                     
                   })
@@ -359,7 +350,8 @@ server <- function(input, output, session) {
     intermediate_save()
     
     a$i <- a$i + 1
-    a$metadata$filename <- r$photos_not_done[[a$i]]
+    a$file <- r$photos_not_done[a$i,]
+    a$metadata$filename <- a$file$name
     
     updateTextAreaInput(session, 'notes', value = '')
     
@@ -368,34 +360,31 @@ server <- function(input, output, session) {
   })
   
   # Save old and new combined annotations
-  observeEvent(input$save_file, {
-    
-    intermediate_save()
-    
-    if(!is.integer(input$save_file)) {
-      
-      r$save_file <- parseSavePath(roots, input$save_file)$datapath
-      
+  output$save_file <- downloadHandler(
+    filename = function() {
+      paste0("annotations_", Sys.Date(), ".tsv")
+    },
+    content = function(file) {
+      intermediate_save()
       old_and_new <- rbind(r$old_annotations, r$annotations)
-      
-      write.table(old_and_new, r$save_file, quote = FALSE, sep = '\t', row.names = FALSE)
-    
+      write.table(old_and_new, file, quote = FALSE, sep = '\t', row.names = FALSE)
     }
-    
-  })
+  )
   
   # Create a photo object for the main panel
   output$current_photo <- renderImage({
     
-    # could be problematic for taller photos?
-    list(src = a$metadata$filename,
-         width = '100%')
+    if(!anyNA(a$file)) {
+      # could be problematic for taller photos?
+      list(src = a$file$datapath,
+           width = '100%')
+    }
     
   }, deleteFile = FALSE)
   
   # Render image
   output$renderPhoto <- renderUI({
-    if(!is.na(a$metadata$filename)) {
+    if(!anyNA(a$file)) {
       imageOutput("current_photo",
                  click = "photo_click",
                  brush = brushOpts(id = "photo_brush", resetOnNew = TRUE)
@@ -407,7 +396,7 @@ server <- function(input, output, session) {
   output$info <- renderText({
     
     paste0(
-      'photo ', a$i, ' (', length(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n'),
+      ifelse(!anyNA(a$file), paste0('photo ', a$i, ' (', nrow(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n')), ''),
       paste0(sapply(names(a$answers), \(x) paste0(x, ': ', a$answers[[x]], '\n')), collapse=''),
       paste(r$messages, collapse = '\n')
     )
@@ -417,4 +406,6 @@ server <- function(input, output, session) {
 
 shinyApp(ui, server)
 
+#to deploy to static site:
+# shinylive::export("shiny_annotation", "cnidae_gritty_photo_annotator", template_params = list(title = cnidae_gritty_photo_annotator))
 # consider more flexible drawing tools and zooming eg. https://stackoverflow.com/questions/65347690/how-do-i-save-adddrawtoolbar-shapes-drawn-in-an-r-leaflet-shiny-map-so-i-can-re
