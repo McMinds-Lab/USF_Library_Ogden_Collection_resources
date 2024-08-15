@@ -22,6 +22,7 @@ ui <- fluidPage(
           div(
             h3("Setup"),
             uiOutput("setup_ui"),
+            verbatimTextOutput("setup_info"),
             h3("Annotations"),
             uiOutput("question_ui", inline = TRUE),
             uiOutput("reset_button", inline = TRUE),
@@ -32,7 +33,7 @@ ui <- fluidPage(
       fluidRow(
         column(12, 
           div(
-            h3("Messages"),
+            h3("Progress"),
             verbatimTextOutput("info")
           )
         )
@@ -57,7 +58,7 @@ server <- function(input, output, session) {
   shinyFileChoose(input, 'resume_file', roots=roots)
   shinyFileSave(input,   'save_file',   roots=roots)
 
-  # Define variables that will change via interaction across files
+  # Define variables that will contain global information
   r <- reactiveValues(vfn             = NULL,
                       vocab           = NULL,
                       dir             = NULL,
@@ -72,12 +73,16 @@ server <- function(input, output, session) {
                       metadata    = list(annotator_id = NA,
                                          session_start_time = NA))
   
-  # Define variables that will change via interaction within a photo
+  # Define variables that are associated with specific photos
   a <- reactiveValues(i          = 1,
                       unasked    = NULL, 
                       answers    = list(),
                       metadata   = list(filename = NA,
                                         photo_annotation_start = NA))
+  
+  # Define variables that are associated with specific questions
+  q <- reactiveValues(i   = 1,
+                      key = NULL)
   
   # Function to check if dependencies are met or if the question is inapplicable
   dependencies_met <- function(question, answers) {
@@ -105,39 +110,46 @@ server <- function(input, output, session) {
     
     all_inapplicable <- TRUE
     
-    for(i in a$unasked) {
+    for(j in a$unasked) {
       
-      current_question <- r$vocab[i, ]
+      q$i <- j
+
+      current_question <- r$vocab[j, ]
+      q$key <- current_question$key
+      
       dependency_status <- dependencies_met(current_question, a$answers)
       
       if(is.na(dependency_status)) {
         # Question is inapplicable, remove it from the unasked list
-        a$unasked <- a$unasked[!a$unasked %in% i]
+        a$unasked <- a$unasked[!a$unasked %in% j]
         next
       }
       
       if(dependency_status) {
         
         all_inapplicable <- FALSE
-        question_key <- current_question$key
         question_text <- current_question$question_text
-        vocab <- c('', strsplit(current_question$values, ',')[[1]])
         
-        output$question_ui <- renderUI({
-          selectInput(question_key, 
-                      question_text,
-                      choices = vocab)
-        })
+        if(current_question$values %in% c('box_coordinates','point_coordinates')) {
+          
+          output$question_ui <- renderUI({
+            list(
+              actionButton("save_coord", label = "Save selection"),
+              actionButton("next_question", label = "Next question (current selection not automatically saved)")
+            )
+          })
+          
+        } else {
+          
+          vocab <- c('', strsplit(current_question$values, ',')[[1]])
         
-        observeEvent(input[[question_key]], {
-          if(input[[question_key]] != '') {
-            isolate({
-              a$answers[[question_key]] <- input[[question_key]]
-              a$unasked <- a$unasked[!a$unasked %in% i]  # Remove the question from the unasked list
-              render_next_question()  # Re-check all unasked questions after an answer
-            })
-          }
-        }, ignoreNULL = FALSE, ignoreInit = TRUE)
+          output$question_ui <- renderUI({
+            selectInput("current_key", 
+                        question_text,
+                        choices = vocab)
+          })
+          
+        }
         
         break
         
@@ -151,7 +163,7 @@ server <- function(input, output, session) {
         
         output$question_ui <- renderUI({
           list(
-            renderText({"Photo finished - Click Next, Save, or Reset\n"}),
+            renderText({"Structured questions finished - finish notes and click Next, Save, or Reset\n"}),
             actionButton("next_photo", label = "Next photo"),
             shinySaveButton('save_file', 'Save data', 'Save file as...')
           )
@@ -161,7 +173,7 @@ server <- function(input, output, session) {
         
         output$question_ui <- renderUI({
           list(
-            renderText({"All photos finished - Click Save or Reset\n"}),
+            renderText({"All photos finished - Finish notes and click Save or Reset\n"}),
             shinySaveButton('save_file', 'Save data', 'Save file as...')
           )
         })
@@ -173,7 +185,7 @@ server <- function(input, output, session) {
   # Reset inputs for current photo
   initialize_photo <- function() {
     
-    for(key in r$vocab$key) {
+    for(key in r$vocab$key[!r$vocab$values %in% c('box_coordinates','point_coordinates')]) {
       if(!is.null(input[[key]])) updateSelectInput(session, key, selected = '')
     }
     a$metadata$photo_annotation_start <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
@@ -192,6 +204,7 @@ server <- function(input, output, session) {
     initialize_photo()
   })
   
+  # Lead through setup (find required files)
   observeEvent(input$aid_submit, {
     
     if(input$aid != '') {
@@ -267,16 +280,17 @@ server <- function(input, output, session) {
                     textAreaInput("notes", "Other notes", rows = 8, resize = 'both')
                   })
                   
-                  output$setup_ui <- renderUI({
-                    renderText({
+                  output$setup_ui <- renderUI({})
+                  output$setup_info <- renderText({
                     
-                      paste0(
-                        'Vocabulary file: ', paste0(r$vfn, '\n'),
-                        'Annotation directory: ',  paste0(r$dir, '\n'),
-                        ifelse(is.null(r$old_annotations_file), '\nNo old annotations - starting from scratch!\n', paste0('Old annotations: ', paste0(r$old_annotations_file, '\n')))
-                      )
-                      
-                    })
+                    paste0(
+                      'Vocabulary file (', nrow(r$vocab), ' questions): ', r$vfn, '\n',
+                      'Photo directory (', length(r$photos), ' photos): ', r$dir, '\n',
+                      ifelse(is.null(r$old_annotations_file), 
+                             'No old annotations - starting from scratch!\n', 
+                             paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', r$old_annotations_file, '\n', length(r$photos) - nrow(r$old_annotations), ' new photos\n'))
+                    )
+                    
                   })
               
                 }, ignoreInit = TRUE)
@@ -311,8 +325,35 @@ server <- function(input, output, session) {
 
   }
   
+  # Detect when an answer is entered via drop-down menu
+  observeEvent(input$current_key, {
+    if(input$current_key != '') {
+      isolate({
+        a$answers[[q$key]] <- input$current_key
+        a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
+        render_next_question()  # Re-check all unasked questions after an answer
+      })
+    }
+  }, ignoreNULL = FALSE, ignoreInit = TRUE)
+     
+  # Detect when a point coordinate or bounding box annotation is being submitted         
+  observeEvent(input$save_coord, {
+    if(r$vocab[q$i,'values'] == 'point_coordinates') {
+      a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_click[c('x','y')], collapse=',')), collapse=';')
+    } else {
+      a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse=',')), collapse=';')
+    }
+  }, ignoreInit = TRUE)
+  
+  # Detect when point coordinate or bounding box annotations are finished for a given question      
+  observeEvent(input$next_question, {
+    isolate({
+      a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
+      render_next_question()  # Re-check all unasked questions after an answer
+    })
+  }, ignoreInit = TRUE)
+  
   # Move to next photo when 'Next' button is clicked
-  # If there are no more photos, add this message to the output
   observeEvent(input$next_photo, {
     
     intermediate_save()
@@ -346,23 +387,18 @@ server <- function(input, output, session) {
   # Create a photo object for the main panel
   output$current_photo <- renderImage({
     
-    # allow size to change
-    width  <- session$clientData$output_current_photo_width
-    height <- session$clientData$output_current_photo_height
-    
-    # need to fiddle with this to get max size
+    # could be problematic for taller photos?
     list(src = a$metadata$filename,
-         #width = width,
-         height = height)
+         width = '100%')
     
   }, deleteFile = FALSE)
   
-  # not using click and brush currently, so might remove or make them conditional (will require thought for formats of vocabulary and annotations files)
+  # Render image
   output$renderPhoto <- renderUI({
     if(!is.na(a$metadata$filename)) {
-      plotOutput("current_photo",
+      imageOutput("current_photo",
                  click = "photo_click",
-                 brush = "photo_brush"
+                 brush = brushOpts(id = "photo_brush", resetOnNew = TRUE)
       )
     }
   })
@@ -370,22 +406,10 @@ server <- function(input, output, session) {
   # Display various data and messages
   output$info <- renderText({
     
-    xy_str <- function(e) {
-      if(is.null(e)) return("NULL\n")
-      paste0("x=", round(e$x, 1), " y=", round(e$y, 1), "\n")
-    }
-    
-    xy_range_str <- function(e) {
-      if(is.null(e)) return("NULL\n")
-      paste0("xmin=", round(e$xmin, 1), " xmax=", round(e$xmax, 1), 
-             " ymin=", round(e$ymin, 1), " ymax=", round(e$ymax, 1), '\n')
-    }
-
     paste0(
-      "click: ", xy_str(input$photo_click),
-      "brush: ", xy_range_str(input$photo_brush),
-      'photo:',  paste(a$metadata$filename, '\n'),
-      r$messages
+      'photo ', a$i, ' (', length(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n'),
+      paste0(sapply(names(a$answers), \(x) paste0(x, ': ', a$answers[[x]], '\n')), collapse=''),
+      paste(r$messages, collapse = '\n')
     )
     
   })
