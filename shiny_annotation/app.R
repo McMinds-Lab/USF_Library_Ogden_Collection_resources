@@ -7,7 +7,7 @@ library(shinyFiles)
 library(mime)
 
 ui <- fluidPage(
-  titlePanel("Ogden Annotations"),
+  titlePanel("Cnidae Gritty Photo Annotations"),
 
   sidebarLayout(
     
@@ -47,7 +47,7 @@ server <- function(input, output, session) {
   output$setup_ui <- renderUI({
     list(
       textInput("aid", "Please enter your initials or other identifer"),
-      actionButton("aid_submit", label = "Submit")
+      actionButton("aid_submit", "Submit")
     )
   })
         
@@ -128,14 +128,14 @@ server <- function(input, output, session) {
       if(dependency_status) {
         
         all_inapplicable <- FALSE
-        question_text <- current_question$question_text
-        
+
         if(current_question$values %in% c('box_coordinates','point_coordinates')) {
           
           output$question_ui <- renderUI({
             list(
-              actionButton("save_coord", label = "Save selection"),
-              actionButton("next_question", label = "Next question (current selection not automatically saved)")
+              renderText({current_question$question_text}),
+              actionButton("save_coord", "Save selection"),
+              actionButton("next_question", "Next question (current selection not automatically saved)")
             )
           })
           
@@ -145,8 +145,8 @@ server <- function(input, output, session) {
         
           output$question_ui <- renderUI({
             selectInput("current_key", 
-                        question_text,
-                        choices = vocab)
+                        current_question$question_text,
+                        vocab)
           })
           
         }
@@ -164,7 +164,7 @@ server <- function(input, output, session) {
         output$question_ui <- renderUI({
           list(
             renderText({"Structured questions finished - finish notes and click Next, Save, or Reset\n"}),
-            actionButton("next_photo", label = "Next photo"),
+            actionButton("next_photo", "Next photo"),
             shinySaveButton('save_file', 'Save data', 'Save file as...')
           )
         })
@@ -192,7 +192,7 @@ server <- function(input, output, session) {
     a$unasked <- 1:nrow(r$vocab)
     a$answers <- list()
     output$reset_button <- renderUI({
-      actionButton("reset_photo", label = "Reset photo")
+      actionButton("reset_photo", "Reset photo")
     })
 
     render_next_question()
@@ -245,7 +245,7 @@ server <- function(input, output, session) {
                 output$setup_ui <- renderUI({
                   list(
                     shinyFilesButton('resume_file', 'Select a previous annotations file', 'Please select a file', FALSE),
-                    actionButton("begin", label = "Begin")
+                    actionButton("begin", "Begin")
                   )
                 })
                 
@@ -416,3 +416,5 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
+# consider more flexible drawing tools and zooming eg. https://stackoverflow.com/questions/65347690/how-do-i-save-adddrawtoolbar-shapes-drawn-in-an-r-leaflet-shiny-map-so-i-can-re
