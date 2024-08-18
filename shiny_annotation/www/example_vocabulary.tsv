@@ -1,0 +1,7 @@
+key	values	question_text	dependencies
+photo_type	benthic,landscape,social,specimen,other	What is the overall photo type?	NA
+has_scleractinian	yes,no,unknown	Are there any Scleractinian corals?	photo_type:benthic,landscape,specimen
+scleractinia_identifiable	yes,no,unknown	Are the Scleractinians identifiable?	has_scleractinian:yes
+scleractinia_crop	box_coordinates	Click and drag to draw a box around the corals	has_scleractinian:yes
+has_algae	yes,no,unknown	Is there any algae?	photo_type:benthic,landscape,specimen
+algae_identifiable	yes,no,unknown	Is the algae identifiable?	has_algae:yes
