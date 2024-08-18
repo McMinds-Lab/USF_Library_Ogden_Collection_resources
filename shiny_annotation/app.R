@@ -61,9 +61,11 @@ server <- function(input, output, session) {
   #shinyFileSave(input,   'save_file',   roots=roots)
 
   # Define variables that will contain global information
-  r <- reactiveValues(vocab           = NULL,
+  r <- reactiveValues(in_v            = NULL,
+                      vocab           = NULL,
+                      photo_df        = NULL,
                       photos_not_done = NULL,
-                      old_annotations      = NULL,
+                      old_annotations = NULL,
                       annotations = NULL,
                       messages    = NULL,
                       metadata    = list(annotator_id = NA,
@@ -201,6 +203,37 @@ server <- function(input, output, session) {
     initialize_photo()
   })
   
+  chose_vocabulary <- reactiveVal(FALSE)
+
+  observeEvent(input$default_vocabulary, {
+    r$in_v <- 'www/example_vocabulary.tsv'
+    r$in_v_name <- 'example_vocabulary.tsv'
+    chose_vocabulary(TRUE)
+  })
+  
+  observeEvent(input$vocabulary, {
+    if(!is.integer(input$vocabulary)) {
+      r$in_v <- input$vocabulary$datapath
+      r$in_v_name <- input$vocabulary$name
+      chose_vocabulary(TRUE)
+    }
+  })
+    
+  chose_photos <- reactiveVal(FALSE)
+
+  observeEvent(input$default_photos, {
+    r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'), name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))
+    chose_photos(TRUE)
+  })
+  
+  observeEvent(input$photos, {
+    if(!is.integer(input$photos)) {
+      r$photo_df <- input$photos
+      chose_photos(TRUE)
+    }
+  })
+  
+  
   # Lead through setup (find required files)
   observeEvent(input$aid_submit, {
     
@@ -209,101 +242,94 @@ server <- function(input, output, session) {
       r$metadata$annotator_id <- input$aid
       
       output$setup_ui <- renderUI({
-        fileInput("vocabulary", "Select a file with vocabulary")
+        list(
+          fileInput("vocabulary", "Select a file with vocabulary"),
+          actionButton("default_vocabulary", "Use example")
+        )
       })
-      
-      # Retrieve info when the vocabulary file button is used
-      observeEvent(input$vocabulary, {
-        
-        if(!is.integer(input$vocabulary)) {
-          
-          r$vocab <- read.table(input$vocabulary$datapath, header = TRUE, sep = '\t')
-          r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + nrow(r$vocab), nrow = 0)), 
-                                    c(names(r$metadata), names(a$metadata), r$vocab$key))
-          
-          output$setup_ui <- renderUI({
-              fileInput("photos", "Select a set of files to annotate", multiple = TRUE, accept = 'image/*')
-          })
-          
-          # Retrieve info when the annotation folder button is used
-          observeEvent(input$photos, {
-            
-            # event is triggered when clicking the button (inputting integer), but we don't want to move on until a directory is chosen (no longer integer)
-            if(!is.integer(input$photos)) {
-            
-              if(nrow(input$photos) > 0) {
-                
-                output$setup_ui <- renderUI({
-                  list(
-                    fileInput("resume_file", "Select a previous annotations file"),
-                    actionButton("begin", "Begin")
-                  )
-                })
-                
-                # Retrieve info when the previous annotation file button is used
-                observeEvent(input$resume_file, {
-                  
-                  if(!is.integer(input$resume_file)) {
-    
-                    r$old_annotations <- read.table(input$resume_file$datapath, header = TRUE, sep = '\t')
-                  
-                  }
-    
-                })
-                
-                # Declare that input files are finished, and begin
-                observeEvent(input$begin, {
-                  
-                  if(!is.null(input$resume_file$datapath)) {
-                    r$photos_not_done <- input$photos[!input$photos$name %in% r$old_annotations$filename,]
-                  } else {
-                    r$photos_not_done <- input$photos
-                  }
-              
-                  a$file <- r$photos_not_done[1,]
-                  a$metadata$filename <- a$file$name
-    
-                  initialize_photo()
-                  
-                  r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
-                  
-                  output$notes_ui <- renderUI({
-                    textAreaInput("notes", "Other notes", rows = 8, resize = 'both')
-                  })
-                  
-                  output$setup_ui <- renderUI({})
-                  output$setup_info <- renderText({
-                    
-                    paste0(
-                      'Vocabulary file (', nrow(r$vocab), ' questions): ', input$vocabulary$name, '\n',
-                      nrow(input$photos), ' photos\n',
-                      ifelse(is.null(input$resume_file$datapath), 
-                             'No old annotations - starting from scratch!\n', 
-                             paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', input$resume_file$name, '\n', nrow(input$photos) - nrow(r$old_annotations), ' new photos\n'))
-                    )
-                    
-                  })
-              
-                }, ignoreInit = TRUE)
-                
-              } else {
-                
-                output$setup_ui <- renderUI({
-                    renderText({"No photos in directory. Refresh page to start over."})
-                })
-                
-              }
-              
-            }
-        
-          }, ignoreInit = TRUE)
-          
-        }
-    
-      }, ignoreInit = TRUE)
       
     }
     
+  }, ignoreInit = TRUE)
+  
+  # Retrieve info when the vocabulary file button is used
+  observeEvent(chose_vocabulary(), {
+    
+    r$vocab <- read.table(r$in_v, header = TRUE, sep = '\t')
+    r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + nrow(r$vocab), nrow = 0)), 
+                              c(names(r$metadata), names(a$metadata), r$vocab$key))
+    
+    output$setup_ui <- renderUI({
+        list(
+          fileInput("photos", "Select a set of files to annotate", multiple = TRUE, accept = 'image/*'),
+          actionButton("default_photos", "Use examples")
+        )
+    })
+    
+  }, ignoreInit = TRUE)
+    
+  # Retrieve info when the annotation folder button is used
+  observeEvent(chose_photos(), {
+  
+    if(nrow(r$photo_df) > 0) {
+      
+      output$setup_ui <- renderUI({
+        list(
+          fileInput("resume_file", "Select a previous annotations file"),
+          actionButton("begin", "Begin")
+        )
+      })
+      
+    }  else {
+    
+      output$setup_ui <- renderUI({
+          renderText({"No photos in directory. Refresh page to start over."})
+      })
+    
+    }
+      
+  }, ignoreInit = TRUE)
+    
+  # Retrieve info when the previous annotation file button is used
+  observeEvent(input$resume_file, {
+    if(!is.integer(input$resume_file)) {
+      r$old_annotations <- read.table(input$resume_file$datapath, header = TRUE, sep = '\t')
+    }
+  })
+    
+  # Declare that input files are finished, and begin
+  observeEvent(input$begin, {
+    
+    if(!is.null(input$resume_file$datapath)) {
+      r$photos_not_done <- r$photo_df[!r$photo_df$name %in% r$old_annotations$filename,]
+    } else {
+      r$photos_not_done <- r$photo_df
+    }
+
+    a$file <- r$photos_not_done[1,]
+    a$metadata$filename <- a$file$name
+
+    initialize_photo()
+    
+    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+    
+    output$notes_ui <- renderUI({
+      textAreaInput("notes", "Other notes", rows = 8, resize = 'both')
+    })
+    
+    output$setup_ui <- renderUI({})
+    output$setup_info <- renderText({
+      
+      paste0(
+        'Vocabulary file (', nrow(r$vocab), ' questions): ', r$in_v_name, '\n',
+        nrow(r$photo_df), ' photos\n',
+        ifelse(is.null(input$resume_file$datapath), 
+               'No old annotations - starting from scratch!\n', 
+               paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', input$resume_file$name, '\n', nrow(r$photo_df) - nrow(r$old_annotations), ' new photos\n'))
+      )
+      
+    })
+
   }, ignoreInit = TRUE)
   
   intermediate_save <- function() {
