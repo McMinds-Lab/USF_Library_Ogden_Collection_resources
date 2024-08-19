@@ -49,16 +49,18 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
+  # 1000*1024^2 is 1GB per file
+  # When app is run locally (including shinylive), each file is copied, but shouldn't be a big deal. 
+  # If this is run on a server, large files could be problematic. 
+  # Could also be an issue with large numbers of files even locally - might want to look into delaying the file uploads somehow?
+  options(shiny.maxRequestSize = 1000*1024^2)
+  
   output$setup_ui <- renderUI({
     list(
       textInput("aid", "Please enter your initials or other identifer"),
       actionButton("aid_submit", "Submit")
     )
   })
-        
-  # Create observers for filepath buttons
-  #roots <- c(home = '~', getVolumes()())
-  #shinyFileSave(input,   'save_file',   roots=roots)
 
   # Define variables that will contain global information
   r <- reactiveValues(in_v            = NULL,
@@ -66,18 +68,18 @@ server <- function(input, output, session) {
                       photo_df        = NULL,
                       photos_not_done = NULL,
                       old_annotations = NULL,
-                      annotations = NULL,
-                      messages    = NULL,
-                      metadata    = list(annotator_id = NA,
-                                         session_start_time = NA))
+                      annotations     = NULL,
+                      messages        = NULL,
+                      metadata        = list(annotator_id       = NA,
+                                             session_start_time = NA))
   
   # Define variables that are associated with specific photos
-  a <- reactiveValues(i          = 1,
-                      unasked    = NULL, 
-                      answers    = list(),
-                      file       = NA,
-                      metadata   = list(filename = NA,
-                                        photo_annotation_start = NA))
+  a <- reactiveValues(i        = 1,
+                      unasked  = NULL, 
+                      answers  = list(),
+                      file     = NA,
+                      metadata = list(filename               = NA,
+                                      photo_annotation_start = NA))
   
   # Define variables that are associated with specific questions
   q <- reactiveValues(i   = 1,
@@ -97,7 +99,7 @@ server <- function(input, output, session) {
       if(is.null(answer)) {
         return(FALSE)  # Dependency not yet met, keep question in the list
       } else if(!answer %in% strsplit(dep[2], ',')[[1]]) {
-        return(NA)  # Dependency will never be met, mark as inapplicable
+        return(NA)     # Dependency will never be met, mark as inapplicable
       }
     }
     return(TRUE)
@@ -128,12 +130,12 @@ server <- function(input, output, session) {
         
         all_inapplicable <- FALSE
 
-        if(current_question$values %in% c('box_coordinates','point_coordinates')) {
+        if(current_question$values %in% c('box_coordinates', 'point_coordinates')) {
           
           output$question_ui <- renderUI({
             list(
               renderText({current_question$question_text}),
-              actionButton("save_coord", "Save selection"),
+              actionButton("save_coord",    "Save selection"),
               actionButton("next_question", "Next question (current selection not automatically saved)")
             )
           })
@@ -163,7 +165,7 @@ server <- function(input, output, session) {
         output$question_ui <- renderUI({
           list(
             renderText({"Structured questions finished - finish notes and click Next, Save, or Reset\n"}),
-            actionButton("next_photo", "Next photo"),
+            actionButton("next_photo",  "Next photo"),
             downloadButton("save_file", "Save data")
           )
         })
@@ -433,11 +435,4 @@ server <- function(input, output, session) {
 shinyApp(ui, server)
 
 #to deploy to static site:
-# shinylive::export("shiny_annotation", "photo_annotator", template_params = list(title = 'Photo Annotator'))
-#then add to top of index.html:
-#---
-#title: Photo Annotator
-#permalink: /photo_annotator/
-#---
-
-# consider more flexible drawing tools and zooming eg. https://stackoverflow.com/questions/65347690/how-do-i-save-adddrawtoolbar-shapes-drawn-in-an-r-leaflet-shiny-map-so-i-can-re
+# shinylive::export("~/scripts/USF_Library_Ogden_Collection_resources/shiny_annotation", "~/scripts/thecnidaegritty/photo_annotator", template_dir = "~/scripts/thecnidaegritty/scripts/shinylive_jekyll_template", template_params = list(title = 'Photo Annotator', permalink = '/photo_annotator/'))
