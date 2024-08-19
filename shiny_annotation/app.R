@@ -13,6 +13,12 @@ downloadButton <- function(...) {
 
 ui <- fluidPage(
   titlePanel("Cnidae Gritty Photo Annotations"),
+  
+  # Ensure photos are scaled to screen
+  tags$head(tags$style(
+        type="text/css",
+        "#current_photo img {max-width: 100%; max-height: 90vh}"
+    )),
 
   sidebarLayout(
     
@@ -403,9 +409,7 @@ server <- function(input, output, session) {
   output$current_photo <- renderImage({
     
     if(!anyNA(a$file)) {
-      # could be problematic for taller photos?
-      list(src = a$file$datapath,
-           width = '100%')
+      list(src    = a$file$datapath)
     }
     
   }, deleteFile = FALSE)
@@ -414,8 +418,10 @@ server <- function(input, output, session) {
   output$renderPhoto <- renderUI({
     if(!anyNA(a$file)) {
       imageOutput("current_photo",
-                  click = "photo_click",
-                  brush = brushOpts(id = "photo_brush", resetOnNew = TRUE)
+                  width  = '100%',
+                  height = '100%', # despite text in ?imageOutput, this is necessary to keep sidebar from overlapping
+                  click  = "photo_click",
+                  brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)
       )
     }
   })
