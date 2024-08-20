@@ -141,6 +141,7 @@ server <- function(input, output, session) {
           output$question_ui <- renderUI({
             list(
               renderText({current_question$question_text}),
+              renderText({'Be aware that the shinylive export of this app currently has bugs for coordinate selection! Download the app and run it locally, and these annotations should work.'}),
               actionButton("save_coord",    "Save selection"),
               actionButton("next_question", "Next question (current selection not automatically saved)")
             )
@@ -230,13 +231,13 @@ server <- function(input, output, session) {
   chose_photos <- reactiveVal(FALSE)
 
   observeEvent(input$default_photos, {
-    r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'), name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))
+    r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'), name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))[sample(2),]
     chose_photos(TRUE)
   })
   
   observeEvent(input$photos, {
     if(!is.integer(input$photos)) {
-      r$photo_df <- input$photos
+      r$photo_df <- input$photos[sample(nrow(input$photos)),] # randomize order
       chose_photos(TRUE)
     }
   })
