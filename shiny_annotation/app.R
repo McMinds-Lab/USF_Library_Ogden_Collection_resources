@@ -12,12 +12,11 @@ downloadButton <- function(...) {
 }
 
 ui <- fluidPage(
-  titlePanel("Cnidae Gritty Photo Annotations"),
-  
+
   # Ensure photos are scaled to screen
   tags$head(tags$style(
         type="text/css",
-        "#current_photo img {max-width: 100%; max-height: 90vh}"
+        "#current_photo img {max-width: 100%; max-height: 100vh}"
     )),
 
   sidebarLayout(
@@ -31,13 +30,13 @@ ui <- fluidPage(
         column(12, 
           # Lead through annotations
           div(
-            h3("Setup"),
+            HTML('<h3>The <a href="https://thecnidaegritty.org">Cnidae Gritty</a> Photo Annotator</h3>'),
             uiOutput("setup_ui"),
             verbatimTextOutput("setup_info"),
             h3("Annotations"),
-            uiOutput("question_ui", inline = TRUE),
+            uiOutput("question_ui",  inline = TRUE),
             uiOutput("reset_button", inline = TRUE),
-            uiOutput("notes_ui", inline = TRUE),
+            uiOutput("notes_ui",     inline = TRUE),
           )
         )
       ),
