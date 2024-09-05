@@ -18,6 +18,8 @@ ui <- fluidPage(
         type="text/css",
         "#current_photo img {max-width: 100%; max-height: 100vh}"
     )),
+  
+  HTML('<br>'),
 
   sidebarLayout(
     
@@ -30,20 +32,20 @@ ui <- fluidPage(
         column(12, 
           # Lead through annotations
           div(
-            HTML('<h3>The <a href="https://thecnidaegritty.org">Cnidae Gritty</a> Photo Annotator</h3>'),
+            HTML('<p style="font-size: 20px"><b>The <a href="https://thecnidaegritty.org">Cnidae Gritty</a> Photo Annotator</b></p>'),
             uiOutput("setup_ui"),
             verbatimTextOutput("setup_info"),
-            h3("Annotations"),
+            HTML('<p style="font-size: 20px"><b>Annotations</b></p>'),
             uiOutput("question_ui",  inline = TRUE),
             uiOutput("reset_button", inline = TRUE),
-            uiOutput("notes_ui",     inline = TRUE),
+            uiOutput("notes_ui",     inline = TRUE)
           )
         )
       ),
       fluidRow(
         column(12, 
           div(
-            h3("Progress"),
+            HTML('<p style="font-size: 20px"><b>Progress</b></p>'),
             verbatimTextOutput("info")
           )
         )
@@ -87,27 +89,74 @@ server <- function(input, output, session) {
                                       photo_annotation_start = NA))
   
   # Define variables that are associated with specific questions
-  q <- reactiveValues(i   = 1,
-                      key = NULL)
+  q <- reactiveValues(j       = 1,
+                      i       = 1,
+                      answers = list(),
+                      values  = list(),
+                      key     = NULL)
   
   # Function to check if dependencies are met or if the question is inapplicable
-  dependencies_met <- function(question, answers) {
+  # return a list of character vectors with vocab length of list equal to number of items relevant to dependency
+  # if dependency will never be met, return NA
+  # if dependencies are not yet met, return list of length 0
+  parse_dependencies <- function(question, answers) {
+    
+    values_split <- strsplit(question$values, ",")[[1]]
     
     if(is.na(question$dependencies)) {
-      return(TRUE)
+      res <- list(unlist(values_split)) # No dependencies; all listed values acceptable
+      return(res)
     }
     
-    dependencies <- strsplit(strsplit(question$dependencies, ";")[[1]], ':')
-    for(dep in dependencies) {
-      answer <- answers[[dep[1]]]
+    dependencies_sep <- strsplit(question$dependencies, ":")[[1]]
+    depname <- dependencies_sep[[1]]
       
-      if(is.null(answer)) {
-        return(FALSE)  # Dependency not yet met, keep question in the list
-      } else if(!answer %in% strsplit(dep[2], ',')[[1]]) {
-        return(NA)     # Dependency will never be met, mark as inapplicable
-      }
+    if(is.null(answers[[depname]])) {
+      
+      res <- list() # Dependency not yet met; keep question in the list
+      
+    } else if(is.na(answers[[depname]])) {
+      
+      res <- NA # Dependency will never be met, mark as inapplicable
+      
+    } else {
+      
+      dependencies_split <- strsplit(strsplit(dependencies_sep[2], ';')[[1]], '#')
+      dependencies_list <- list(key = strsplit(sapply(dependencies_split, \(x) x[[1]]),'!'),
+                                acceptable = !grepl('!', sapply(dependencies_split, \(x) x[[1]])),
+                                indices = lapply(dependencies_split, \(x) {
+                                  if(length(x) == 1) {
+                                    return(seq_along(values_split))
+                                  } else {
+                                    idx <- unlist(lapply(strsplit(x[2],',')[[1]], \(y) do.call(\(fr, t=fr) seq.int(fr,t), as.list(unlist(strsplit(y,'-'))))))
+                                    return(idx)
+                                  }
+                                }))
+      dependencies_list$key[!dependencies_list$acceptable] <- lapply(dependencies_list$key[!dependencies_list$acceptable], \(x) x[-1])
+      answers_split <- strsplit(answers[[depname]], ';')[[1]]
+      
+      res <- lapply(answers_split, \(answer) {
+        
+        answer_in_keys <- sapply(dependencies_list$key, \(x) answer %in% x)
+        
+        # Unacceptable_answers should be of the form any!x!y!z, implying anything other than x, y, or z is acceptable
+        matches <- (answer_in_keys & dependencies_list$acceptable) |                                     # answer is in a white list
+                   (!answer_in_keys & !dependencies_list$acceptable) |  # answer is not in a black list
+                   sapply(dependencies_list$key, \(x) x == 'any')       # any answer is acceptable
+        
+        if(any(matches)) {
+          return(values_split[unlist(dependencies_list$indices[matches])])
+        } else {
+          return(character(0)) 
+        }
+        
+      })
+      
+      if(all(sapply(res,length) == 0)) res <- NA
+
     }
-    return(TRUE)
+    
+    return(res)
     
   }
   
@@ -118,20 +167,22 @@ server <- function(input, output, session) {
     
     for(j in a$unasked) {
       
-      q$i <- j
+      q$j <- j
 
       current_question <- r$vocab[j, ]
       q$key <- current_question$key
       
-      dependency_status <- dependencies_met(current_question, a$answers)
+      q$values <- parse_dependencies(current_question, a$answers)
       
-      if(is.na(dependency_status)) {
-        # Question is inapplicable, remove it from the unasked list
-        a$unasked <- a$unasked[!a$unasked %in% j]
-        next
+      if(length(q$values) == 1) {
+        if(is.na(q$values)) {
+          # Question is inapplicable, remove it from the unasked list
+          a$unasked <- a$unasked[!a$unasked %in% j]
+          next
+        }
       }
       
-      if(dependency_status) {
+      if(length(q$values) > 0) {
         
         all_inapplicable <- FALSE
 
@@ -148,13 +199,32 @@ server <- function(input, output, session) {
           
         } else {
           
-          vocab <- c('', strsplit(current_question$values, ',')[[1]])
-        
-          output$question_ui <- renderUI({
-            selectInput("current_key", 
-                        current_question$question_text,
-                        vocab)
-          })
+          q$i <- 1
+          q$answers <- list()
+
+          for(i in 1:length(q$values)) {
+            
+            if(length(q$values[[q$i]]) == 1) {
+              if(is.na(q$values[[q$i]])) {
+                q$answers[[q$i]] <- 'NA'
+                q$i <- q$i + 1
+                next
+              }
+            }
+              
+            # display coord on plot somehow
+            
+            vocab <- c('', q$values[[q$i]])
+      
+            output$question_ui <- renderUI({
+              selectInput("current_key", 
+                          current_question$question_text,
+                          vocab)
+            })
+            
+            break
+            
+          } 
           
         }
         
@@ -263,7 +333,7 @@ server <- function(input, output, session) {
   # Retrieve info when the vocabulary file button is used
   observeEvent(chose_vocabulary(), {
     
-    r$vocab <- read.table(r$in_v, header = TRUE, sep = '\t')
+    r$vocab <- read.table(r$in_v, header = TRUE, sep = '\t', comment.char='')
     r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + nrow(r$vocab), nrow = 0)), 
                               c(names(r$metadata), names(a$metadata), r$vocab$key))
     
@@ -354,16 +424,47 @@ server <- function(input, output, session) {
   observeEvent(input$current_key, {
     if(input$current_key != '') {
       isolate({
-        a$answers[[q$key]] <- input$current_key
-        a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
-        render_next_question()  # Re-check all unasked questions after an answer
+        
+        q$answers[[q$i]] <- input$current_key
+        
+        q$i <- q$i + 1
+        if(q$i <= length(q$values)) {
+          for(i in q$i:length(q$values)) {
+            
+            if(length(q$values[[q$i]]) == 0) {
+              q$answers[[q$i]] <- 'NA'
+              q$i <- q$i + 1
+              next
+            }
+            
+            if(length(q$values[[q$i]]) == 1) {
+              if(is.na(q$values[[q$i]])) {
+                q$answers[[q$i]] <- 'NA'
+                q$i <- q$i + 1
+                next
+              }
+            }
+            
+            #display_next_coord
+            vocab <- c('', q$values[[q$i]])
+            updateSelectInput(session, 'current_key', choices = vocab, selected = '')
+            break
+          }
+        }
+        
+        if(q$i > length(q$values)) {
+          a$answers[[q$key]] <- paste(q$answers, collapse = ';') # answers for each iterate saved between semicolons
+          a$unasked <- a$unasked[!a$unasked %in% q$j]  # Remove the question from the unasked list
+          render_next_question()  # Re-check all unasked questions after an answer
+        }
+          
       })
     }
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
      
   # Detect when a point coordinate or bounding box annotation is being submitted         
   observeEvent(input$save_coord, {
-    if(r$vocab[q$i,'values'] == 'point_coordinates') {
+    if(r$vocab[q$j,'values'] == 'point_coordinates') {
       a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_click[c('x','y')], collapse=',')), collapse=';')
     } else {
       a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse=',')), collapse=';')
@@ -373,7 +474,8 @@ server <- function(input, output, session) {
   # Detect when point coordinate or bounding box annotations are finished for a given question      
   observeEvent(input$next_question, {
     isolate({
-      a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
+      if(is.null(a$answers[[q$key]])) a$answers[[q$key]] <- NA
+      a$unasked <- a$unasked[!a$unasked %in% q$j]  # Remove the question from the unasked list
       render_next_question()  # Re-check all unasked questions after an answer
     })
   }, ignoreInit = TRUE)
@@ -440,5 +542,7 @@ server <- function(input, output, session) {
 
 shinyApp(ui, server)
 
+# to run locally:
+# shiny::runApp('~/scripts/USF_Library_Ogden_Collection_resources/shiny_annotation')
 #to deploy to static site:
 # shinylive::export("~/scripts/USF_Library_Ogden_Collection_resources/shiny_annotation", "~/scripts/thecnidaegritty/photo_annotator", template_dir = "~/scripts/thecnidaegritty/scripts/shinylive_jekyll_template", template_params = list(title = 'Photo Annotator', permalink = '/photo_annotator/'))
