@@ -17,11 +17,15 @@ ui <- fluidPage(
   tags$head(
     tags$style(
       type="text/css",
-      "#current_photo img {max-width: 100%; max-height: 100%}"
+      "#current_photo img {max-width: 100%; max-height: 100vh}"
     ),
     tags$style(
       type="text/css",
       "#overlay_plot {position:absolute; top:0; left:0; pointer-events:none;}"
+    ),
+    tags$style(
+      type="text/css",
+      "#overlay_plot img {max-width: 100%; max-height: 100vh}"
     )
   ),
   
@@ -601,12 +605,12 @@ server <- function(input, output, session) {
         style = "position:relative; display:inline-block;",
         imageOutput("current_photo",
                     width  = '100%',
-                    height = '95vh',
+                    height = '100%',
                     click  = "photo_click",
                     brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)),
         plotOutput("overlay_plot", 
-                   width = "100%", 
-                   height = '95vh')
+                   width  = "100%", 
+                   height = '100%')
     )
   })
 
