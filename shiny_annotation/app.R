@@ -11,9 +11,10 @@ downloadButton <- function(...) {
  tag
 }
 
+# The ui object defines the page organization
 ui <- fluidPage(
 
-  # Link to external CSS file
+  # Link to external CSS file (controls plot size and position)
   tags$head(
     includeCSS("www/styles.css")
   ),
@@ -52,10 +53,15 @@ ui <- fluidPage(
     )
   ),
   
-  # Link to external JS file
+  # Link to external JS file (gathers plot size information and will soon enable keyboard shortcuts)
   includeScript("www/custom.js")
+  
 )
 
+# The server function:
+# 1. creates 'observers' that detect user input
+# 2. does all the data processing in the background
+# 3. creates display objects that plug into the ui (sometimes essentially writes the ui from scratch if it's very dynamic)
 server <- function(input, output, session) {
   
   # 1000*1024^2 is 1GB per file
@@ -71,6 +77,9 @@ server <- function(input, output, session) {
     )
   })
 
+  # Reactive values are variables that have global scope and depend on things like user input
+  # Unlike regular variables, they can be monitored by 'observers' to automatically trigger events whenever they change
+  
   # Define variables that will contain global information
   r <- reactiveValues(in_v            = NULL,
                       vocab           = NULL,
@@ -102,10 +111,11 @@ server <- function(input, output, session) {
                       current_coords = list(),
                       current_box = list())
   
-  # Function to check if dependencies are met or if the question is inapplicable
-  # return a list of character vectors with vocab length of list equal to number of items relevant to dependency
-  # if dependency will never be met, return NA
-  # if dependencies are not yet met, return list of length 0
+  # Function to parse dependencies to:
+  # 1. check if they are met for the current question, not yet met, or inapplicable
+  # 2. return the name of the question's dependency (curently unused)
+  # 3. return a list of character vectors: the list is as long as the number of sub-items (e.g. annotated points) relevant to the question, and each vector is the vocab relevant to that sub-item
+  # 4. return a list of coordinates relevant to the sub-items to be annotated
   parse_dependencies <- function(question, answers) {
     
     values_split <- strsplit(question$values, ",")[[1]]
@@ -199,7 +209,7 @@ server <- function(input, output, session) {
 
   }
   
-  # Function to find and render the next available question or check if done
+  # Function to find and render the next available question or check if done with photo
   render_next_question <- function() {
     
     q$current_coords <- list()
@@ -215,16 +225,18 @@ server <- function(input, output, session) {
       
       q$dep <- parse_dependencies(current_question, a$answers)
       
+      # If question is inapplicable, remove it from the unasked list
       if(is.na(q$dep$fulfilled)) {
-        # Question is inapplicable, remove it from the unasked list
         a$unasked <- a$unasked[!a$unasked %in% j]
         next
       }
       
+      # If question has its dependencies fulfilled, proceed
       if(q$dep$fulfilled) {
         
         all_inapplicable <- FALSE
 
+        # Interactive annotations are handled differently than drop-down ones
         if(current_question$values %in% c('box_coordinates', 'point_coordinates')) {
           
           q$i <- 0
@@ -247,22 +259,25 @@ server <- function(input, output, session) {
           q$answers <- list()
           q$current_coords <- q$dep$coords
 
+          # Iterate through sub-items until user input is needed
           for(i in 1:length(q$dep$values)) {
             
+            # No values are relevant; fill in NA and move to the next sub-item
             if(length(q$dep$values[[q$i]]) == 0) {
               q$answers[[q$i]] <- 'NA'
               q$i <- q$i + 1
               next
             }
             
+            # Only one value is relevant; add it automatically and move to the next
             if(length(q$dep$values[[q$i]]) == 1) {
               q$answers[[q$i]] <- q$dep$values[[q$i]]
               q$i <- q$i + 1
               next
             }
             
+            # Let user choose which of multiple relevant values is true
             vocab <- c('', q$dep$values[[q$i]])
-      
             output$question_ui <- renderUI({
               list(
                 selectInput("current_key", 
@@ -467,6 +482,7 @@ server <- function(input, output, session) {
 
   }, ignoreInit = TRUE)
   
+  # Function to add current photo's annotations to a data frame 
   intermediate_save <- function() {
     
     r$annotations[a$i,] <- NA
@@ -482,30 +498,36 @@ server <- function(input, output, session) {
     if(input$current_key != '') {
       isolate({
         
+        # Add the answer to a list
         q$answers[[q$i]] <- input$current_key
         
+        # Iterate through sub-items asking same question
         q$i <- q$i + 1
         if(q$i <= length(q$dep$values)) {
           for(i in q$i:length(q$dep$values)) {
             
+            # No values are relevant; fill in NA and move to the next sub-item
             if(length(q$dep$values[[q$i]]) == 0) {
               q$answers[[q$i]] <- 'NA'
               q$i <- q$i + 1
               next
             }
             
+            # Only one value is relevant; add it automatically and move to the next
             if(length(q$dep$values[[q$i]]) == 1) {
               q$answers[[q$i]] <- q$dep$values[[q$i]]
               q$i <- q$i + 1
               next
             }
-              
+            
+            # Let user choose which of multiple relevant values is true
             vocab <- c('', q$dep$values[[q$i]])
             updateSelectInput(session, 'current_key', choices = vocab, selected = '')
             break
           }
         }
         
+        # Finalize question and move to the next
         if(q$i > length(q$dep$values)) {
           a$answers[[q$key]] <- paste(q$answers, collapse = ';') # answers for each iterate saved between semicolons
           a$unasked <- a$unasked[!a$unasked %in% q$j]  # Remove the question from the unasked list
@@ -530,6 +552,7 @@ server <- function(input, output, session) {
     })
   }, ignoreInit = TRUE)
   
+  # Undo a coordinate selection
   observeEvent(input$remove_coord, {
     isolate({
       if(r$vocab[q$j,'values'] == 'point_coordinates') {
@@ -583,6 +606,7 @@ server <- function(input, output, session) {
       paste0("annotations_", Sys.Date(), ".tsv")
     },
     content = function(file) {
+      # If the current photo was finished, add it to the data; otherwise don't
       if(length(a$unasked) == 0) {
         intermediate_save()
       } else {
@@ -603,24 +627,30 @@ server <- function(input, output, session) {
   # Overlay points
   output$overlay_plot <- renderPlot({
     
-    # Overlay circles 
     if(length(q$current_coords) > 0) {
+      # Get actual image size with external javascript function
       session$sendCustomMessage('getImageDimensions', list())
+      # Create an empty plot area with size and pixels equal to photo
       par(mar = c(0,0,0,0))
       plot(NULL, type = "n", bty = 'n', xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = c(1, input$image_width), ylim = c(1, input$image_height), xaxs='i', yaxs='i', asp=1)
-      point.cex <- floor(input$image_height / 20) / strheight("o", cex = 1) # make diameter of circles 1/20th of plot height
+      # Make diameter of circles 1/20th of plot height
+      point.cex <- floor(input$image_height / 20) / strheight("o", cex = 1)
+      # Add circles for all sub-items relevant to current question
       for(i in seq_along(q$current_coords)) {
+        # Current item red; others orange; both with transparency
         thiscolor <- if(i == q$i) adjustcolor("red", alpha.f=0.4) else adjustcolor("orange", alpha.f=0.6)
-        points(q$current_coords[[i]][[1]], input$image_height - q$current_coords[[i]][[2]], col = thiscolor, pch = 21, bg = thiscolor, cex = point.cex)  # Draw circles
+        # y-axis is reversed for plots compared to images
+        points(q$current_coords[[i]][[1]], input$image_height - q$current_coords[[i]][[2]], col = thiscolor, pch = 21, bg = thiscolor, cex = point.cex)
       }
     } else {
+      # Before a photo is chosen, put in a placeholder (currently still generates error)
       par(mar = c(0,0,0,0))
       plot(NULL, type = "n", xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = 1:2, ylim = 1:2)
     }
     
   }, bg = 'transparent')
   
-  # Render image
+  # Render image and overlay
   output$renderPhoto <- renderUI({
     div(
         style = "position:relative; display:inline-block;",
