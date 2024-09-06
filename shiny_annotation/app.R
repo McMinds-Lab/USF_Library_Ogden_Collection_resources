@@ -107,9 +107,12 @@ server <- function(input, output, session) {
   q <- reactiveValues(j       = 1,
                       i       = 1,
                       answers = list(),
-                      values  = list(),
+                      dep     = list(fulfilled = FALSE,
+                                     dep_name  = NULL,
+                                     values    = NULL,
+                                     coords    = list()),
                       key     = NULL,
-                      current_coords = NULL)
+                      current_coords = list())
   
   # Function to check if dependencies are met or if the question is inapplicable
   # return a list of character vectors with vocab length of list equal to number of items relevant to dependency
@@ -120,66 +123,98 @@ server <- function(input, output, session) {
     values_split <- strsplit(question$values, ",")[[1]]
     
     if(is.na(question$dependencies)) {
-      res <- list(unlist(values_split)) # No dependencies; all listed values acceptable
-      return(res)
-    }
-    
-    dependencies_sep <- strsplit(question$dependencies, ":")[[1]]
-    depname <- dependencies_sep[[1]]
       
-    if(is.null(answers[[depname]])) {
-      
-      res <- list() # Dependency not yet met; keep question in the list
-      
-    } else if(is.na(answers[[depname]])) {
-      
-      res <- NA # Dependency will never be met, mark as inapplicable
+      # No dependencies; all listed values acceptable
+      fulfilled <- TRUE
+      dep_name <- NA
+      values <- list(unlist(values_split))
+      coords <- list()
       
     } else {
+    
+      dependencies_sep <- strsplit(question$dependencies, ":")[[1]]
+      dep_name <- dependencies_sep[[1]]
       
-      dependencies_split <- strsplit(strsplit(dependencies_sep[2], ';')[[1]], '#')
-      dependencies_list <- list(key = strsplit(sapply(dependencies_split, \(x) x[[1]]),'!'),
-                                acceptable = !grepl('!', sapply(dependencies_split, \(x) x[[1]])),
-                                indices = lapply(dependencies_split, \(x) {
-                                  if(length(x) == 1) {
-                                    return(seq_along(values_split))
-                                  } else {
-                                    idx <- unlist(lapply(strsplit(x[2],',')[[1]], \(y) do.call(\(fr, t=fr) seq.int(fr,t), as.list(unlist(strsplit(y,'-'))))))
-                                    return(idx)
-                                  }
-                                }))
-      dependencies_list$key[!dependencies_list$acceptable] <- lapply(dependencies_list$key[!dependencies_list$acceptable], \(x) x[-1])
-      answers_split <- strsplit(answers[[depname]], ';')[[1]]
-      
-      res <- lapply(answers_split, \(answer) {
+      if(is.null(answers[[dep_name]])) {
         
-        answer_in_keys <- sapply(dependencies_list$key, \(x) answer %in% x)
+        fulfilled <- FALSE # Dependency not yet met; keep question in the list
+        values <- NA
+        coords <- list()
         
-        # Unacceptable_answers should be of the form any!x!y!z, implying anything other than x, y, or z is acceptable
-        matches <- (answer_in_keys & dependencies_list$acceptable) |                                     # answer is in a white list
-                   (!answer_in_keys & !dependencies_list$acceptable) |  # answer is not in a black list
-                   sapply(dependencies_list$key, \(x) x == 'any')       # any answer is acceptable
+      } else if(is.na(answers[[dep_name]])) {
         
-        if(any(matches)) {
-          return(values_split[unlist(dependencies_list$indices[matches])])
+        fulfilled <- NA # Dependency will never be met, mark as inapplicable
+        values <- NA
+        coords <- list()
+        
+      } else {
+        
+        dependencies_split <- strsplit(strsplit(dependencies_sep[2], ';')[[1]], '#')
+        dependencies_list <- list(key = strsplit(sapply(dependencies_split, \(x) sub('any!', '', x[[1]])), ','),
+                                  acceptable = !grepl('!', sapply(dependencies_split, \(x) x[[1]])),
+                                  indices = lapply(dependencies_split, \(x) {
+                                    if(length(x) == 1) {
+                                      return(seq_along(values_split))
+                                    } else {
+                                      idx <- unlist(lapply(strsplit(x[2],',')[[1]], \(y) do.call(\(fr, t=fr) seq.int(fr,t), as.list(unlist(strsplit(y,'-'))))))
+                                      return(idx)
+                                    }
+                                  }))
+        answers_split <- strsplit(answers[[dep_name]], ';')[[1]]
+        
+        values <- lapply(answers_split, \(answer) {
+          
+          answer_in_keys <- sapply(dependencies_list$key, \(x) answer %in% x)
+          
+          # Unacceptable_answers should be of the form any!x!y!z, implying anything other than x, y, or z is acceptable
+          matches <- (answer_in_keys & dependencies_list$acceptable) |    # answer is in a white list
+                     (!answer_in_keys & !dependencies_list$acceptable) |  # answer is not in a black list
+                     sapply(dependencies_list$key, \(x) 'any' %in% x)     # any answer is acceptable
+          
+          if(any(matches)) {
+            return(values_split[unlist(dependencies_list$indices[matches])])
+          } else {
+            return(character(0))
+          }
+          
+        })
+        
+        fulfilled <- if(all(sapply(values,length) == 0)) NA else TRUE
+        
+        if(!is.na(fulfilled)) {
+          # See if annotation is linked to point coordinates and store them if so
+          cur_dep <- dep_name
+          while(TRUE) {
+            if(r$vocab$values[r$vocab$key==cur_dep] == 'point_coordinates') {
+              coords <- lapply(strsplit(strsplit(a$answers[[cur_dep]], ';')[[1]], ','), as.numeric)
+              break
+            } else {
+              new_dep <- r$vocab$dependencies[r$vocab$key==cur_dep]
+              if(is.na(new_dep)) {
+                coords <- list()
+                break
+              } else {
+                cur_dep <- strsplit(new_dep, ":")[[1]][[1]]
+              }
+            }
+          }
         } else {
-          return(character(0)) 
+          coords <- list()
         }
-        
-      })
-      
-      if(all(sapply(res,length) == 0)) res <- NA
-
+  
+      }
     }
     
-    return(res)
+    res <- list(fulfilled = fulfilled, dep_name = dep_name, values = values, coords = coords)
     
+    return(res)
+
   }
   
   # Function to find and render the next available question or check if done
   render_next_question <- function() {
     
-    q$current_coords <- NULL
+    q$current_coords <- list()
     all_inapplicable <- TRUE
     
     for(j in a$unasked) {
@@ -189,21 +224,21 @@ server <- function(input, output, session) {
       current_question <- r$vocab[j, ]
       q$key <- current_question$key
       
-      q$values <- parse_dependencies(current_question, a$answers)
+      q$dep <- parse_dependencies(current_question, a$answers)
       
-      if(length(q$values) == 1) {
-        if(is.na(q$values)) {
-          # Question is inapplicable, remove it from the unasked list
-          a$unasked <- a$unasked[!a$unasked %in% j]
-          next
-        }
+      if(is.na(q$dep$fulfilled)) {
+        # Question is inapplicable, remove it from the unasked list
+        a$unasked <- a$unasked[!a$unasked %in% j]
+        next
       }
       
-      if(length(q$values) > 0) {
+      if(q$dep$fulfilled) {
         
         all_inapplicable <- FALSE
 
         if(current_question$values %in% c('box_coordinates', 'point_coordinates')) {
+          
+          q$i <- 1
           
           output$question_ui <- renderUI({
             list(
@@ -218,26 +253,23 @@ server <- function(input, output, session) {
           
           q$i <- 1
           q$answers <- list()
+          q$current_coords <- q$dep$coords
 
-          for(i in 1:length(q$values)) {
+          for(i in 1:length(q$dep$values)) {
             
-            if(length(q$values[[q$i]]) == 1) {
-              if(is.na(q$values[[q$i]])) {
-                q$answers[[q$i]] <- 'NA'
-                q$i <- q$i + 1
-                next
-              }
+            if(length(q$dep$values[[q$i]]) == 0) {
+              q$answers[[q$i]] <- 'NA'
+              q$i <- q$i + 1
+              next
             }
             
-            depname <- strsplit(current_question$dependencies, ":")[[1]][[1]]
-            if(!anyNA(depname)) {
-              if(r$vocab$values[r$vocab$key==depname] == 'point_coordinates') {
-                answers_split <- strsplit(strsplit(a$answers[[depname]], ';')[[1]], ',')
-                q$current_coords <- as.numeric(answers_split[[q$i]])
-              }
+            if(length(q$dep$values[[q$i]]) == 1) {
+              q$answers[[q$i]] <- q$dep$values[[q$i]]
+              q$i <- q$i + 1
+              next
             }
             
-            vocab <- c('', q$values[[q$i]])
+            vocab <- c('', q$dep$values[[q$i]])
       
             output$question_ui <- renderUI({
               selectInput("current_key", 
@@ -247,7 +279,14 @@ server <- function(input, output, session) {
             
             break
             
-          } 
+          }
+          
+          # If an entire annotation category is automatically fillable, this should activate
+          if(q$i > length(q$dep$values)) {
+            a$answers[[q$key]] <- paste(q$answers, collapse = ';') # answers for each iterate saved between semicolons
+            a$unasked <- a$unasked[!a$unasked %in% q$j]  # Remove the question from the unasked list
+            next
+          }
           
         }
         
@@ -451,38 +490,28 @@ server <- function(input, output, session) {
         q$answers[[q$i]] <- input$current_key
         
         q$i <- q$i + 1
-        if(q$i <= length(q$values)) {
-          for(i in q$i:length(q$values)) {
+        if(q$i <= length(q$dep$values)) {
+          for(i in q$i:length(q$dep$values)) {
             
-            if(length(q$values[[q$i]]) == 0) {
+            if(length(q$dep$values[[q$i]]) == 0) {
               q$answers[[q$i]] <- 'NA'
               q$i <- q$i + 1
               next
             }
             
-            if(length(q$values[[q$i]]) == 1) {
-              if(is.na(q$values[[q$i]])) {
-                q$answers[[q$i]] <- 'NA'
-                q$i <- q$i + 1
-                next
-              }
-            }
-            
-            depname <- strsplit(r$vocab$dependencies[[q$j]], ":")[[1]][[1]]
-            if(!anyNA(depname)) {
-              if(r$vocab$values[r$vocab$key==depname] == 'point_coordinates') {
-                answers_split <- strsplit(strsplit(a$answers[[depname]], ';')[[1]], ',')
-                q$current_coords <- as.numeric(answers_split[[q$i]])
-              }
+            if(length(q$dep$values[[q$i]]) == 1) {
+              q$answers[[q$i]] <- q$dep$values[[q$i]]
+              q$i <- q$i + 1
+              next
             }
               
-            vocab <- c('', q$values[[q$i]])
+            vocab <- c('', q$dep$values[[q$i]])
             updateSelectInput(session, 'current_key', choices = vocab, selected = '')
             break
           }
         }
         
-        if(q$i > length(q$values)) {
+        if(q$i > length(q$dep$values)) {
           a$answers[[q$key]] <- paste(q$answers, collapse = ';') # answers for each iterate saved between semicolons
           a$unasked <- a$unasked[!a$unasked %in% q$j]  # Remove the question from the unasked list
           render_next_question()  # Re-check all unasked questions after an answer
@@ -494,8 +523,9 @@ server <- function(input, output, session) {
      
   # Detect when a point coordinate or bounding box annotation is being submitted         
   observeEvent(input$save_coord, {
+    q$i <- q$i + 1
     if(r$vocab[q$j,'values'] == 'point_coordinates') {
-      q$current_coords <- input$photo_click[c('x','y')]
+      q$current_coords[[q$i]] <- input$photo_click[c('x','y')]
       a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_click[c('x','y')], collapse=',')), collapse=';')
     } else {
       a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse=',')), collapse=';')
@@ -549,15 +579,18 @@ server <- function(input, output, session) {
   output$overlay_plot <- renderPlot({
     
     # Overlay circles 
-    if(!is.null(q$current_coords[[1]])) {
+    if(length(q$current_coords) > 0) {
       session$sendCustomMessage('getImageDimensions', list())
-      print(input$image_width)
-      par(mar = c(0, 0, 0, 0))
+      par(mar = c(0,0,0,0))
       plot(NULL, type = "n", bty = 'n', xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = c(1, input$image_width), ylim = c(1, input$image_height), xaxs='i', yaxs='i', asp=1)
-      points(q$current_coords[[1]], input$image_height - q$current_coords[[2]], col = "red", pch = 21, bg = "red", cex = 2)  # Draw circles
+      point.cex <- floor(input$image_height / 20) / strheight("o", cex = 1) # make diameter of circles 1/20th of plot height
+      for(i in seq_along(q$current_coords)) {
+        thiscolor <- if(i == q$i) adjustcolor("red", alpha.f=0.4) else adjustcolor("orange", alpha.f=0.6)
+        points(q$current_coords[[i]][[1]], input$image_height - q$current_coords[[i]][[2]], col = thiscolor, pch = 21, bg = thiscolor, cex = point.cex)  # Draw circles
+      }
     } else {
-      par(mar = c(0, 0, 0, 0))
-      plot(1, type = "n", xlab = "", ylab = "", xaxt = "n", yaxt = "n")
+      par(mar = c(0,0,0,0))
+      plot(NULL, type = "n", xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = 1:2, ylim = 1:2)
     }
     
   }, bg = 'transparent')
