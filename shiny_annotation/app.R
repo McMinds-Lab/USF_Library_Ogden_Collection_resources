@@ -18,6 +18,10 @@ ui <- fluidPage(
     tags$style(
       type="text/css",
       "#current_photo img {max-width: 100%; max-height: 100%}"
+    ),
+    tags$style(
+      type="text/css",
+      "#overlay_plot {position:absolute; top:0; left:0; pointer-events:none;}"
     )
   ),
   
@@ -26,7 +30,16 @@ ui <- fluidPage(
   sidebarLayout(
     
     mainPanel(
-      uiOutput("renderPhoto")
+      uiOutput("renderPhoto"),
+      tags$script(HTML(
+        "Shiny.addCustomMessageHandler('getImageDimensions', function(message) {
+           var img = document.querySelector('#current_photo img');
+           if (img) {
+             Shiny.setInputValue('image_width', img.naturalWidth);
+             Shiny.setInputValue('image_height', img.naturalHeight);
+           }
+        });"
+      ))
     ),
     
     sidebarPanel(
@@ -87,7 +100,6 @@ server <- function(input, output, session) {
                       unasked   = NULL, 
                       answers   = list(),
                       file      = NA,
-                      photo_raw = NULL,
                       metadata  = list(filename               = NA,
                                        photo_annotation_start = NA))
   
@@ -397,7 +409,6 @@ server <- function(input, output, session) {
 
     a$file <- r$photos_not_done[1,]
     a$metadata$filename <- a$file$name
-    a$photo_raw <- magick::image_read(a$file$datapath)
 
     initialize_photo()
     
@@ -508,7 +519,6 @@ server <- function(input, output, session) {
     a$i <- a$i + 1
     a$file <- r$photos_not_done[a$i,]
     a$metadata$filename <- a$file$name
-    a$photo_raw <- magick::image_read(a$file$datapath)
 
     updateTextAreaInput(session, 'notes', value = '')
     
@@ -529,37 +539,41 @@ server <- function(input, output, session) {
   )
   
   # Create a photo object for the main panel
-  output$current_photo <- renderPlot({
+  output$current_photo <- renderImage({
+    req(a$file)  # Ensure a file is ready
+    # Return the filepath for renderImage to display
+    list(src = a$file$datapath)
+  }, deleteFile = FALSE)
+  
+  # Overlay points
+  output$overlay_plot <- renderPlot({
     
-    if(!is.null(a$photo_raw)) {
-      
-      img_raster <- as.raster(a$photo_raw)
-      img_width <- ncol(img_raster)
-      img_height <- nrow(img_raster)
-    
+    # Overlay circles 
+    if(!is.null(q$current_coords[[1]])) {
+      session$sendCustomMessage('getImageDimensions', list())
+      print(input$image_width)
       par(mar = c(0, 0, 0, 0))
-      plot(NULL, type = "n", bty = 'n', xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = c(1, img_width), ylim = c(1, img_height), xaxs='i', yaxs='i', asp=1)
-      rasterImage(img_raster, 1, 1, img_width, img_height)
-      
-      # Overlay circles for each click
-      if(!is.null(q$current_coords[[1]])) {
-        points(q$current_coords[[1]], q$current_coords[[2]], col = "red", pch = 21, bg = "red", cex = 2)  # Draw circles
-      }
-
+      plot(NULL, type = "n", bty = 'n', xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = c(1, input$image_width), ylim = c(1, input$image_height), xaxs='i', yaxs='i', asp=1)
+      points(q$current_coords[[1]], input$image_height - q$current_coords[[2]], col = "red", pch = 21, bg = "red", cex = 2)  # Draw circles
     } else {
       par(mar = c(0, 0, 0, 0))
       plot(1, type = "n", xlab = "", ylab = "", xaxt = "n", yaxt = "n")
     }
     
-  })
+  }, bg = 'transparent')
   
   # Render image
   output$renderPhoto <- renderUI({
-    imageOutput("current_photo",
-                width  = '100%',
-                height = '95vh',
-                click  = "photo_click",
-                brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)
+    div(
+        style = "position:relative; display:inline-block;",
+        imageOutput("current_photo",
+                    width  = '100%',
+                    height = '95vh',
+                    click  = "photo_click",
+                    brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)),
+        plotOutput("overlay_plot", 
+                   width = "100%", 
+                   height = '95vh')
     )
   })
 
