@@ -14,10 +14,12 @@ downloadButton <- function(...) {
 ui <- fluidPage(
 
   # Ensure photos are scaled to screen
-  tags$head(tags$style(
-        type="text/css",
-        "#current_photo img {max-width: 100%; max-height: 100vh}"
-    )),
+  tags$head(
+    tags$style(
+      type="text/css",
+      "#current_photo img {max-width: 100%; max-height: 100%}"
+    )
+  ),
   
   HTML('<br>'),
 
@@ -81,19 +83,21 @@ server <- function(input, output, session) {
                                              session_start_time = NA))
   
   # Define variables that are associated with specific photos
-  a <- reactiveValues(i        = 1,
-                      unasked  = NULL, 
-                      answers  = list(),
-                      file     = NA,
-                      metadata = list(filename               = NA,
-                                      photo_annotation_start = NA))
+  a <- reactiveValues(i         = 1,
+                      unasked   = NULL, 
+                      answers   = list(),
+                      file      = NA,
+                      photo_raw = NULL,
+                      metadata  = list(filename               = NA,
+                                       photo_annotation_start = NA))
   
   # Define variables that are associated with specific questions
   q <- reactiveValues(j       = 1,
                       i       = 1,
                       answers = list(),
                       values  = list(),
-                      key     = NULL)
+                      key     = NULL,
+                      current_coords = NULL)
   
   # Function to check if dependencies are met or if the question is inapplicable
   # return a list of character vectors with vocab length of list equal to number of items relevant to dependency
@@ -163,6 +167,7 @@ server <- function(input, output, session) {
   # Function to find and render the next available question or check if done
   render_next_question <- function() {
     
+    q$current_coords <- NULL
     all_inapplicable <- TRUE
     
     for(j in a$unasked) {
@@ -211,8 +216,14 @@ server <- function(input, output, session) {
                 next
               }
             }
-              
-            # display coord on plot somehow
+            
+            depname <- strsplit(current_question$dependencies, ":")[[1]][[1]]
+            if(!anyNA(depname)) {
+              if(r$vocab$values[r$vocab$key==depname] == 'point_coordinates') {
+                answers_split <- strsplit(strsplit(a$answers[[depname]], ';')[[1]], ',')
+                q$current_coords <- as.numeric(answers_split[[q$i]])
+              }
+            }
             
             vocab <- c('', q$values[[q$i]])
       
@@ -386,6 +397,7 @@ server <- function(input, output, session) {
 
     a$file <- r$photos_not_done[1,]
     a$metadata$filename <- a$file$name
+    a$photo_raw <- magick::image_read(a$file$datapath)
 
     initialize_photo()
     
@@ -445,7 +457,14 @@ server <- function(input, output, session) {
               }
             }
             
-            #display_next_coord
+            depname <- strsplit(r$vocab$dependencies[[q$j]], ":")[[1]][[1]]
+            if(!anyNA(depname)) {
+              if(r$vocab$values[r$vocab$key==depname] == 'point_coordinates') {
+                answers_split <- strsplit(strsplit(a$answers[[depname]], ';')[[1]], ',')
+                q$current_coords <- as.numeric(answers_split[[q$i]])
+              }
+            }
+              
             vocab <- c('', q$values[[q$i]])
             updateSelectInput(session, 'current_key', choices = vocab, selected = '')
             break
@@ -465,6 +484,7 @@ server <- function(input, output, session) {
   # Detect when a point coordinate or bounding box annotation is being submitted         
   observeEvent(input$save_coord, {
     if(r$vocab[q$j,'values'] == 'point_coordinates') {
+      q$current_coords <- input$photo_click[c('x','y')]
       a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_click[c('x','y')], collapse=',')), collapse=';')
     } else {
       a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse=',')), collapse=';')
@@ -488,7 +508,8 @@ server <- function(input, output, session) {
     a$i <- a$i + 1
     a$file <- r$photos_not_done[a$i,]
     a$metadata$filename <- a$file$name
-    
+    a$photo_raw <- magick::image_read(a$file$datapath)
+
     updateTextAreaInput(session, 'notes', value = '')
     
     initialize_photo()
@@ -508,24 +529,38 @@ server <- function(input, output, session) {
   )
   
   # Create a photo object for the main panel
-  output$current_photo <- renderImage({
+  output$current_photo <- renderPlot({
     
-    if(!anyNA(a$file)) {
-      list(src    = a$file$datapath)
+    if(!is.null(a$photo_raw)) {
+      
+      img_raster <- as.raster(a$photo_raw)
+      img_width <- ncol(img_raster)
+      img_height <- nrow(img_raster)
+    
+      par(mar = c(0, 0, 0, 0))
+      plot(NULL, type = "n", bty = 'n', xlab = "", ylab = "", xaxt = "n", yaxt = "n", xlim = c(1, img_width), ylim = c(1, img_height), xaxs='i', yaxs='i', asp=1)
+      rasterImage(img_raster, 1, 1, img_width, img_height)
+      
+      # Overlay circles for each click
+      if(!is.null(q$current_coords[[1]])) {
+        points(q$current_coords[[1]], q$current_coords[[2]], col = "red", pch = 21, bg = "red", cex = 2)  # Draw circles
+      }
+
+    } else {
+      par(mar = c(0, 0, 0, 0))
+      plot(1, type = "n", xlab = "", ylab = "", xaxt = "n", yaxt = "n")
     }
     
-  }, deleteFile = FALSE)
+  })
   
   # Render image
   output$renderPhoto <- renderUI({
-    if(!anyNA(a$file)) {
-      imageOutput("current_photo",
-                  width  = '100%',
-                  height = '100%', # despite text in ?imageOutput, this is necessary to keep sidebar from overlapping
-                  click  = "photo_click",
-                  brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)
-      )
-    }
+    imageOutput("current_photo",
+                width  = '100%',
+                height = '95vh',
+                click  = "photo_click",
+                brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)
+    )
   })
 
   # Display various data and messages
