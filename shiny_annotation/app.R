@@ -13,20 +13,9 @@ downloadButton <- function(...) {
 
 ui <- fluidPage(
 
-  # Ensure photos are scaled to screen
+  # Link to external CSS file
   tags$head(
-    tags$style(
-      type="text/css",
-      "#current_photo img {max-width: 100%; max-height: 100vh}"
-    ),
-    tags$style(
-      type="text/css",
-      "#overlay_plot {position:absolute; top:0; left:0; pointer-events:none;}"
-    ),
-    tags$style(
-      type="text/css",
-      "#overlay_plot img {max-width: 100%; max-height: 100vh}"
-    )
+    includeCSS("www/styles.css")
   ),
   
   HTML('<br>'),
@@ -34,16 +23,7 @@ ui <- fluidPage(
   sidebarLayout(
     
     mainPanel(
-      uiOutput("renderPhoto"),
-      tags$script(HTML(
-        "Shiny.addCustomMessageHandler('getImageDimensions', function(message) {
-           var img = document.querySelector('#current_photo img');
-           if (img) {
-             Shiny.setInputValue('image_width', img.naturalWidth);
-             Shiny.setInputValue('image_height', img.naturalHeight);
-           }
-        });"
-      ))
+      uiOutput("renderPhoto")
     ),
     
     sidebarPanel(
@@ -70,7 +50,10 @@ ui <- fluidPage(
         )
       )
     )
-  )
+  ),
+  
+  # Link to external JS file
+  includeScript("www/custom.js")
 )
 
 server <- function(input, output, session) {
@@ -116,7 +99,8 @@ server <- function(input, output, session) {
                                      values    = NULL,
                                      coords    = list()),
                       key     = NULL,
-                      current_coords = list())
+                      current_coords = list(),
+                      current_box = list())
   
   # Function to check if dependencies are met or if the question is inapplicable
   # return a list of character vectors with vocab length of list equal to number of items relevant to dependency
@@ -219,6 +203,7 @@ server <- function(input, output, session) {
   render_next_question <- function() {
     
     q$current_coords <- list()
+    q$current_box <- list()
     all_inapplicable <- TRUE
     
     for(j in a$unasked) {
@@ -242,14 +227,17 @@ server <- function(input, output, session) {
 
         if(current_question$values %in% c('box_coordinates', 'point_coordinates')) {
           
-          q$i <- 1
+          q$i <- 0
           
           output$question_ui <- renderUI({
             list(
               renderText({current_question$question_text}),
               renderText({'Be aware that the shinylive export of this app currently has bugs for coordinate selection! Download the app and run it locally, and these annotations should work.'}),
-              actionButton("save_coord",    "Save selection"),
-              actionButton("next_question", "Next question (current selection not automatically saved)")
+              div(
+                actionButton("remove_coord",  "Undo click"),
+                actionButton("next_question", "Next question")
+              ),
+              downloadButton("save_file", "Discard this photo and save the rest")
             )
           })
           
@@ -276,9 +264,12 @@ server <- function(input, output, session) {
             vocab <- c('', q$dep$values[[q$i]])
       
             output$question_ui <- renderUI({
-              selectInput("current_key", 
-                          current_question$question_text,
-                          vocab)
+              list(
+                selectInput("current_key", 
+                            current_question$question_text,
+                            vocab),
+                downloadButton("save_file", "Discard this photo and save the rest")
+              )
             })
             
             break
@@ -526,20 +517,46 @@ server <- function(input, output, session) {
   }, ignoreNULL = FALSE, ignoreInit = TRUE)
      
   # Detect when a point coordinate or bounding box annotation is being submitted         
-  observeEvent(input$save_coord, {
-    q$i <- q$i + 1
-    if(r$vocab[q$j,'values'] == 'point_coordinates') {
-      q$current_coords[[q$i]] <- input$photo_click[c('x','y')]
-      a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_click[c('x','y')], collapse=',')), collapse=';')
-    } else {
-      a$answers[[q$key]] <- paste(c(a$answers[[q$key]], paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse=',')), collapse=';')
-    }
+  observeEvent(input$photo_click, {
+    isolate({
+      if(r$vocab[q$j,'values'] %in% c('point_coordinates','box_coordinates')) {
+        q$i <- q$i + 1
+        if(r$vocab[q$j,'values'] == 'point_coordinates') {
+          q$current_coords[[q$i]] <- input$photo_click[c('x','y')]
+        } else {
+          q$current_box[[q$i]] <- input$photo_brush[c('xmin','ymin','xmax','ymax')]
+        }
+      }
+    })
+  }, ignoreInit = TRUE)
+  
+  observeEvent(input$remove_coord, {
+    isolate({
+      if(r$vocab[q$j,'values'] == 'point_coordinates') {
+        q$current_coords[[q$i]] <- NULL
+      } else {
+        q$current_box[[q$i]] <- NULL
+      }
+      q$i <- q$i - 1
+    })
   }, ignoreInit = TRUE)
   
   # Detect when point coordinate or bounding box annotations are finished for a given question      
   observeEvent(input$next_question, {
     isolate({
-      if(is.null(a$answers[[q$key]])) a$answers[[q$key]] <- NA
+      if(r$vocab[q$j,'values'] == 'point_coordinates') {
+        if(length(q$current_coords) == 0) {
+          a$answers[[q$key]] <- NA 
+        } else {
+          a$answers[[q$key]] <- paste(sapply(q$current_coords,paste,collapse=','), collapse=';')
+        }
+      } else {
+        if(length(q$current_box) == 0) {
+          a$answers[[q$key]] <- NA 
+        } else {
+          a$answers[[q$key]] <- paste(sapply(q$current_box,paste,collapse=','), collapse=';')
+        }
+      }
       a$unasked <- a$unasked[!a$unasked %in% q$j]  # Remove the question from the unasked list
       render_next_question()  # Re-check all unasked questions after an answer
     })
@@ -566,7 +583,11 @@ server <- function(input, output, session) {
       paste0("annotations_", Sys.Date(), ".tsv")
     },
     content = function(file) {
-      intermediate_save()
+      if(length(a$unasked) == 0) {
+        intermediate_save()
+      } else {
+        initialize_photo()
+      }
       old_and_new <- rbind(r$old_annotations, r$annotations)
       write.table(old_and_new, file, quote = FALSE, sep = '\t', row.names = FALSE)
     }

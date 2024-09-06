@@ -1,0 +1,18 @@
+/* styles.css */
+
+#current_photo img {
+  max-width: 100%; 
+  max-height: 100vh
+}
+
+#overlay_plot {
+  position:absolute; 
+  top:0; 
+  left:0; 
+  pointer-events:none;
+}
+
+#overlay_plot img {
+  max-width: 100%; 
+  max-height: 100vh;
+}
