@@ -1,9 +1,0 @@
-key	values	question_text	dependencies
-photo_type	benthic,landscape,social,specimen,other	What is the overall photo type?	NA
-invert_coords	point_coordinates	Click each Scleractinian coral or other benthic invert	photo_type:benthic;landscape;specimen
-growth_form	boulder,branching,plates,meandroid,solitary,encrusting,fleshy	What is the growth form of the invert?	invert_coords:any
-genus	Siderastrea,Porites,Orbicella,Acropora,Madracis,Millepora,unidentifiable	To what genus does this belong?	growth_form:boulder#1-3;branching#4-5;encrusting#6;any#7
-species	Siderastrea_sideria,Siderastrea_radians,Stephancoenia_intersepta,Porites_astreoides,Orbicella_annularis,Montastrea_cavernosa,Solanastrea_bournoni,Solenastrea_hyades,Dichocoenia_stokesi,Favia_fragum,Millepora_complanata,unidentifiable	To what species does this belong?	genus:Siderastrea#1-2;Stephanocoenia#3;Porites#4;Orbicella#5;Montastraea#6;Solenastrea#7-8;Dichocoenia#9;Favia#10;Millepora#11;any#12
-order	Scleractinia,Anthoathecata,other,unidentifiable	To what order does this belong?	genus:any!Millepora#1;Millepora#2;placeholder#3;unidentifiable#4
-phylum	Cnidaria,Porifera,Chordata,Bryozoa,other,unidentifiable	To what phylum does this belong?	order:Scleractinia,Anthoathecata#1;unidentifiable#1-6
-disease_type	none,black band disease,white band disease,bleaching,dead,other,unknown	Does it show signs of disease?	invert_coords:any
