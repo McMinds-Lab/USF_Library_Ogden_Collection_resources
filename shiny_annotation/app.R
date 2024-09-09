@@ -94,7 +94,7 @@ server <- function(input, output, session) {
                       aux_i             = 1,
                       photo_df          = NULL,
                       photos_not_done   = NULL,
-                      old_annotations   = NULL,
+                      old_annotations   = data.frame(),
                       annotation_type   = 'setup',
                       photo_keys        = character(0),
                       observation_keys  = character(0),
@@ -115,7 +115,8 @@ server <- function(input, output, session) {
   q <- reactiveValues(i = NULL) # which line of the questions file are we on
   
   # Define variables that are reset for specific sub-questions 
-  sq <- reactiveValues(i = NULL, # which line of a$observations are we on
+  sq <- reactiveValues(n = 0,    # how many lines of a$observations exist before the current question
+                       i = NULL, # which line of a$observations are we on
                        j = NULL) # which stage of a question are we on (e.g. when using an external taxonomy)
   
   # Reactive UI elements will be automatically updated whenever the reactive values that they depend on change
@@ -162,7 +163,7 @@ server <- function(input, output, session) {
   observeEvent(input$default_prompts, {
     r$prompts_file <- list(name     = 'example_prompts.tsv',
                            datapath = 'www/example_prompts.tsv')
-  })
+  }, ignoreInit = TRUE)
   
   # This one triggers if the user chooses their own filepath
   # req() is needed here but not for the actionButton observer because the fileInput reactive value can be initially set to NULL on loading of the UI, which would otherwise be enough to trigger this event
@@ -237,18 +238,18 @@ server <- function(input, output, session) {
     
     # Look through keys for the special format `file:`, and create an empty named list to be later filled in via fileInput
     aux_names <- unique(sapply(r$parsed, \(x) x$aux_name))
-    aux_names <- aux_names[!is.na(aux_names)]
+    aux_names <- aux_names[sapply(aux_names, length) > 0]
     r$aux_files <- r$aux_data <- setNames(vector("list", length(aux_names)), aux_names)
     
     # Primary data storage for annotations associated with whole photo
     # Includes timestamps, annotator ID, and other metadata in addition to custom annotations
-    r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + length(r$photo_keys), nrow = 0)), 
-                              c(names(r$metadata), names(a$metadata), r$photo_keys))
+    r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + length(r$photo_keys) + 1, nrow = 0)), 
+                              c(names(r$metadata), names(a$metadata), r$photo_keys, 'notes'))
     
     # Primary data storage for annotations associated with specific coordinate-based observations within the photos
     # Includes photo name and timestamp to link to photo-wide observations for merging, in addition to custom annotations
-    r$observations <- setNames(data.frame(matrix(ncol = 2 + length(r$observation_keys), nrow = 0)), 
-                               c(names(r$metadata), names(a$metadata), r$observation_keys))
+    r$observations <- setNames(data.frame(matrix(ncol = length(a$metadata) + length(r$observation_keys), nrow = 0)), 
+                               c(names(a$metadata), r$observation_keys))
     
     # For each photo, specific observations will be stored separately until the photo is finalized
     a$annotations <- r$annotations
@@ -285,13 +286,13 @@ server <- function(input, output, session) {
     } else {
       r$workflow_step <- 'photo_files'
     }
-  })
+  }, ignoreInit = TRUE)
   
   # Respond to user photo choices
   observeEvent(input$default_photos, {
     r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'), name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))[sample(2),]
     r$workflow_step <- 'previous_annotations'
-  })
+  }, ignoreInit = TRUE)
   
   observeEvent(input$photos, {
     req(input$photos)
@@ -299,19 +300,7 @@ server <- function(input, output, session) {
     r$workflow_step <- 'previous_annotations'
   })
   
-  # Retrieve info when the previous annotation file button is used
-  observeEvent(input$resume_file, {
-    req(input$resume_file)
-    r$old_annotations <- read.table(input$resume_file$datapath, header = TRUE, sep = '\t')
-    r$workflow_step <- 'annotate'
-  })
-    
-  # Skip uploading previous annotations by clicking Begin
-  observeEvent(input$begin, {
-    r$workflow_step <- 'annotate'
-  })
-  
-  # Once setup is completed, we start filling in other UI elements
+  # Before we can respond to user input here, we will need to prepare the upcoming UI elements and define some functions
   # Load the photo to annotate
   output$current_photo <- renderImage({
     req(r$photos_not_done, a$i)
@@ -320,49 +309,57 @@ server <- function(input, output, session) {
   
   # Overlay points for observations
   output$overlay_plot <- renderPlot({
-    req(q$current_coords)
-    
+    req(q$i, sq$i)
+    if(q$i > length(r$parsed)) return(NULL)
+    if(!r$parsed[[q$i]]$is_observation) return(NULL)
+    idx_points <- which(a$observations$point_or_box == 'point')
+    req(idx_points)
+    current_coords <- lapply(strsplit(a$observations$coordinates[idx_points], ','), as.numeric)
+
     # Get actual image size with external javascript function
     session$sendCustomMessage('getImageDimensions', list())
+    req(input$image_width, input$image_height)
     
     # Create an empty plot area with size and pixels equal to photo
     par(mar = c(0,0,0,0))
     plot(NULL, 
          type = "n", bty = 'n', xlab = "", ylab = "", xaxt = "n", yaxt = "n", xaxs='i', yaxs='i', asp=1, 
          xlim = c(1, input$image_width), ylim = c(1, input$image_height))
-    
     # Make diameter of circles 1/20th of plot height
     point.cex <- floor(input$image_height / 20) / strheight("o", cex = 1)
-    
     # Add circles for all sub-items relevant to current question
-    for(i in seq_along(q$current_coords)) {
-      
-      # Current item red; others orange; both with transparency
-      current_color <- if(i == sq$i) adjustcolor("red", alpha.f = 0.5) else adjustcolor("orange", alpha.f = 0.6)
-      
+    for(i in seq_along(current_coords)) {
+      # Current item red; others in same category orange; others grey; all with transparency
+      picking_now <- r$parsed[[q$i]]$keys[[1]] == 'observation_type'
+      typematch <- a$observations$observation_type[idx_points[[i]]] == a$observations$observation_type[idx_points[[sq$i]]]
+      current_color <- if(idx_points[[i]] == sq$i & (!picking_now | sq$i > sq$n)) {
+        adjustcolor("red", alpha.f = 0.5) 
+      } else if(typematch & (!picking_now | sq$i > sq$n)) {
+        adjustcolor("orange", alpha.f = 0.6)
+      } else {
+        adjustcolor("black", alpha.f = 0.5)
+      }
       # y-axis is reversed for plots compared to images
-      points(q$current_coords[[i]][[1]], 
-             input$image_height - q$current_coords[[i]][[2]], 
-             col = thiscolor, 
+      points(current_coords[[i]][[1]], 
+             input$image_height - current_coords[[i]][[2]], 
+             col = current_color, 
              pch = 21, 
              bg  = current_color, 
              cex = point.cex)
-      
     }
 
   }, bg = 'transparent')
 
   # Some text summarizing the setup
   output$setup_info <- renderText({
-    if(r$workflow_step = 'annotate') {
-      paste0(
-        'Prompts file (', nrow(r$prompts), ' prompts): ', r$prompts_file$name, '\n',
-        nrow(r$photo_df), ' photos\n',
-        ifelse(is.null(input$resume_file$datapath), 
-               'No old annotations - starting from scratch!\n', 
-               paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', input$resume_file$name, '\n', nrow(r$photo_df) - nrow(r$old_annotations), ' new photos\n'))
-      )
-    }
+    req(a$i)
+    paste0(
+      'Prompts file (', nrow(r$prompts), ' prompts): ', r$prompts_file$name, '\n',
+      nrow(r$photo_df), ' photos\n',
+      ifelse(is.null(input$resume_file$datapath), 
+             'No old annotations - starting from scratch!\n', 
+             paste0('Old annotations (', nrow(r$old_annotations), ' photos): ', input$resume_file$name, '\n', nrow(r$photo_df) - nrow(r$old_annotations), ' new photos\n'))
+    )
   })
   
   # This is the workhorse UI element for annotation input
@@ -371,13 +368,13 @@ server <- function(input, output, session) {
       setup = NULL,
       dropdown = list(
         selectInput("current_key", 
-                    r$prompts$question_text[[q$i]],
-                    c('', q$dep$values[[sq$i]])),
+                    r$parsed[[q$i]]$question_text,
+                    c('', r$parsed[[q$i]]$values)),
         downloadButton("save_file", "Discard this photo and save the rest"),
         actionButton("reset_photo", "Reset photo")
       ),
       coordinate = list(
-        renderText({r$prompts$question_text[[q$i]]}),
+        renderText({r$parsed[[q$i]]$question_text}),
         renderText({'Be aware that the shinylive export of this app currently has bugs for coordinate selection! Download the app and run it locally, and these annotations should work.'}),
         div(
           actionButton("remove_coord",  "Undo click"),
@@ -402,89 +399,160 @@ server <- function(input, output, session) {
   
   # Add an area to enter unstructured extra photo annotations
   output$notes_ui <- renderUI({
-    if(r$workflow_step = 'annotate') {
-      textAreaInput("notes", "Other notes", rows = 8, resize = 'both')
-    }
+    req(a$i)
+    textAreaInput("notes", "Other notes", rows = 8, resize = 'both')
   })
   
   # Display various data and messages
   output$info <- renderText({
+    req(a$i)
     paste0(
-      ifelse(!anyNA(r$photos_not_done[a$i,]), paste0('photo ', a$i, ' (', nrow(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n')), ''),
+      paste0('photo ', a$i, ' (', nrow(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n')),
       paste0(sapply(names(a$answers), \(x) paste0(x, ': ', a$answers[[x]], '\n')), collapse=''),
       paste(r$messages, collapse = '\n')
     )
   })
   
-  # Define functions that construct and iterate through prompts
+  # Function that constructs and iterates through prompts
   render_next_question <- function() {
     
-    fulfilled <- FALSE
-    if(length(r$parsed[[q$i]]$dependencies) == 0) {
-      # If no dependencies, then always proceed
-      fulfilled <- TRUE
-    } else {
-      # Only proceed if ALL dependencies are fulfilled
-      fulfilled <- all(sapply(names(r$parsed[[q$i]]$dependencies), \(x) {
-        # For each dependency, annotation can match ANY of the listed values
-        if(x %in% r$observation_keys) {
-          # Current dependency is associated with within-photo observations
-          a$observations[sq$i,x] %in% r$parsed[[q$i]]$dependencies[[x]]
-        } else {
-          # Current dependency is associated with photo-wide annotations
-          a$annotations[[x]] %in% r$parsed[[q$i]]$dependencies[[x]]
-        }
-      }))
-    }
-    
-    if(fulfilled) {
-      if(r$parsed[[q$i]]$keys[[1]] == 'observation_type') {
-        # Send signal to update UI for coordinate selection
-        sq$i <- 0 # this might not be right (more lines in a$observations than lines that are relevant here)
-        r$annotation_type <- 'coordinate'
-      } else if(length(r$parsed[[q$i]]$aux_name) > 0) {
-        # Send signal to begin auxiliary file traversal
-        sq$i <- 1 # this might not be right (more lines in a$observations than lines that are relevant here)
-        sq$j <- 1
-        r$aux_i <- 1
+    if(q$i <= length(r$parsed)) {
+      
+      if(length(r$parsed[[q$i]]$dependencies) == 0) {
+        # If no dependencies, then always proceed
+        fulfilled <- TRUE
       } else {
-        # Send signal to update UI for dropdown menu input
-        sq$i <- 1 # this might not be right (more lines in a$observations than lines that are relevant here)
-        r$annotation_type <- 'dropdown'
+        # Only proceed if ALL dependencies are fulfilled
+        fulfilled <- all(sapply(names(r$parsed[[q$i]]$dependencies), \(x) {
+          # For each dependency, annotation can match ANY of the listed values
+          if(x %in% r$observation_keys) {
+            # Current dependency is associated with within-photo observations
+            a$observations[sq$i,x] %in% r$parsed[[q$i]]$dependencies[[x]]
+          } else {
+            # Current dependency is associated with photo-wide annotations
+            a$annotations[1,x] %in% r$parsed[[q$i]]$dependencies[[x]]
+          }
+        }))
       }
+      
+      if(fulfilled) {
+        if(r$parsed[[q$i]]$keys[[1]] == 'observation_type') {
+          # Send signal to update UI for coordinate selection
+          sq$i <- nrow(a$observations)
+          r$annotation_type <- 'coordinate'
+        } else if(!r$parsed[[q$i]]$is_observation | sq$i <= nrow(a$observations)) {
+          # Either this is a photo-wide annotation or there are more within-photo observations to check
+          if(length(r$parsed[[q$i]]$aux_name) > 0) {
+            # Send signal to begin auxiliary file traversal (make sure to enable an 'unidentifiable' option and autofill when only one possibility)
+    
+          } else {
+            if(length(r$parsed[[q$i]]$values) == 1) {
+              # Only one option; autofill it and move on
+              if(r$parsed[[q$i]]$is_observation) {
+                a$observations[sq$i,r$parsed[[q$i]]$keys] <- r$parsed[[q$i]]$values
+                sq$i <- sq$i + 1
+              } else {
+                a$annotations[1,r$parsed[[q$i]]$keys] <- r$parsed[[q$i]]$values
+                sq$n <- nrow(a$observations)
+                q$i <- q$i + 1
+              }
+              render_next_question()
+            } else {
+              # Send signal to update UI for dropdown menu input
+              r$annotation_type <- 'dropdown'
+            }
+          }
+        } else {
+          # All observations checked; move to next question
+          sq$n <- nrow(a$observations)
+          sq$i <- 1
+          q$i <- q$i + 1
+          render_next_question()
+        }
+      } else {
+        # Question not applicable; move on
+        if(r$parsed[[q$i]]$is_observation & sq$i <= nrow(a$observations)) {
+          sq$i <- sq$i + 1
+          render_next_question()
+        } else {
+          sq$n <- nrow(a$observations)
+          sq$i <- 1
+          q$i <- q$i + 1
+          render_next_question()
+        }
+      }
+      
+    } else {
+      q$i <- length(r$parsed) + 1
+      sq$i <- nrow(a$observations) + 1
+      if(a$i < nrow(r$photos_not_done)) {
+        r$annotation_type <- 'photo_finished'
+      } else {
+        r$annotation_type <- 'all_finished'
+      } 
+      
     }
 
   }
   
   # Initializes or resets inputs for current photo
   initialize_photo <- function() {
-    
     a$annotations <- r$annotations[0,]
     a$observations <- r$observations[0,]
+    a$metadata$filename <- r$photos_not_done$name[[a$i]]
     a$metadata$photo_annotation_start <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
-    
+    r$aux_i <- 1
     q$i <- 1
+    sq$n <- 0
     sq$i <- 1
     sq$j <- 1
-
+    updateTextAreaInput(session, 'notes', value = '')
     render_next_question()
-    
   }
   
+  # Now, back to watching for user input to finalize setup
+  # Retrieve info when the previous annotation file button is used
+  observeEvent(input$resume_file, {
+    req(input$resume_file)
+    r$old_annotations <- read.table(input$resume_file$datapath, header = TRUE, sep = '\t')
+    r$photos_not_done <- r$photo_df[!r$photo_df$name %in% r$old_annotations$filename,]
+    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+    a$i <- 1
+    r$workflow_step <- 'annotate'
+    initialize_photo()
+  })
+    
+  # Skip uploading previous annotations by clicking Begin
+  observeEvent(input$begin, {
+    r$photos_not_done <- r$photo_df
+    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+    r$workflow_step <- 'annotate'
+    a$i <- 1
+    initialize_photo()
+  }, ignoreInit = TRUE)
   
-  
-            # Add a new line to the observations dataframe
-        a$observations[q$i,'observation_type'] <- r$parsed[[q$i]]$values
-        a$observations[q$i,'point_or_box'] <- names(r$parsed[[q$i]]$question_text)
-  
-  
-  ## Create observers that will respond to the various annotation prompts
-  
+  ## And then watch for responses to the various annotation prompts
+  # Detect when an answer is entered via drop-down menu
+  observeEvent(input$current_key, {
+    req(input$current_key)
+    if(r$parsed[[q$i]]$is_observation) {
+      a$observations[sq$i,r$parsed[[q$i]]$keys] <- input$current_key
+      sq$i <- sq$i + 1
+    } else {
+      a$annotations[1,r$parsed[[q$i]]$keys] <- input$current_key
+      q$i <- q$i + 1
+    }
+    updateSelectInput(session, 'current_key', selected = '')
+    render_next_question()
+  })
+
   # Detect when a point coordinate is being submitted         
   observeEvent(input$photo_click, {
     if(names(r$parsed[[q$i]]$question_text) == 'point_coordinates') {
       sq$i <- sq$i + 1
-      q$observations[sq$i,'coordinates'] <- paste(input$photo_click[c('x','y')], collapse = ',')
+      a$observations[sq$i,'observation_type'] <- r$parsed[[q$i]]$values
+      a$observations[sq$i,'point_or_box'] <- 'point'
+      a$observations[sq$i,'coordinates'] <- paste(input$photo_click[c('x','y')], collapse = ',')
     }
   })
   
@@ -492,238 +560,102 @@ server <- function(input, output, session) {
   observeEvent(input$photo_brush, {
     if(names(r$parsed[[q$i]]$question_text) == 'box_coordinates') {
       sq$i <- sq$i + 1
-      q$observations[sq$i,'coordinates'] <- paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse = ',')
+      a$observations[sq$i,'observation_type'] <- r$parsed[[q$i]]$values
+      a$observations[sq$i,'point_or_box'] <- 'box'
+      a$observations[sq$i,'coordinates'] <- paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse = ',')
     }
   })
   
   # Undo a coordinate selection
   observeEvent(input$remove_coord, {
-    isolate({
-      if(r$prompts[q$i,'values'] == 'point_coordinates') {
-        q$current_coords[[sq$i]] <- NULL
-      } else {
-        q$current_box[[sq$i]] <- NULL
-      }
+    # Make sure not to remove observations from previous questions
+    if(sq$i > sq$n) {
+      a$observations <- a$observations[-sq$i,]
       sq$i <- sq$i - 1
-    })
-  }, ignoreInit = TRUE)
+    }
+  })
   
   # Detect when point coordinate or bounding box annotations are finished for a given question      
   observeEvent(input$next_question, {
-    isolate({
-      if(r$prompts[q$i,'values'] == 'point_coordinates') {
-        if(length(q$current_coords) == 0) {
-          a$answers[[q$key]] <- NA 
-        } else {
-          a$answers[[q$key]] <- paste(sapply(q$current_coords,paste,collapse=','), collapse=';')
-        }
-      } else {
-        if(length(q$current_box) == 0) {
-          a$answers[[q$key]] <- NA 
-        } else {
-          a$answers[[q$key]] <- paste(sapply(q$current_box,paste,collapse=','), collapse=';')
-        }
-      }
-      a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
-      render_next_question()  # Re-check all unasked questions after an answer
-    })
-  }, ignoreInit = TRUE)
-  
-  
-  # Function to find and render the next available question or check if done with photo
-  render_next_question <- function() {
-    
-    q$current_coords <- list()
-    q$current_box <- list()
-    all_inapplicable <- TRUE
-    
-    for(j in a$unasked) {
-      
-      q$i <- j
-
-      current_question <- r$prompts[j, ]
-      q$key <- current_question$key
-      
-      q$dep <- parse_dependencies(current_question, a$answers)
-      
-      # If question is inapplicable, remove it from the unasked list
-      if(is.na(q$dep$fulfilled)) {
-        a$unasked <- a$unasked[!a$unasked %in% j]
-        next
-      }
-      
-      # If question has its dependencies fulfilled, proceed
-      if(q$dep$fulfilled) {
-        
-        all_inapplicable <- FALSE
-
-        # Interactive annotations are handled differently than drop-down ones
-        if(current_question$values %in% c('box_coordinates', 'point_coordinates')) {
-          
-          sq$i <- 0
-          r$annotation_type <- 'coordinate'
-          
-        } else {
-          
-          sq$i <- 1
-          q$answers <- list()
-          q$current_coords <- q$dep$coords
-
-          # Iterate through sub-items until user input is needed
-          for(i in 1:length(q$dep$values)) {
-            
-            # No values are relevant; fill in NA and move to the next sub-item
-            if(length(q$dep$values[[sq$i]]) == 0) {
-              q$answers[[sq$i]] <- 'NA'
-              sq$i <- sq$i + 1
-              next
-            }
-            
-            # Only one value is relevant; add it automatically and move to the next
-            if(length(q$dep$values[[sq$i]]) == 1) {
-              q$answers[[sq$i]] <- q$dep$values[[sq$i]]
-              sq$i <- sq$i + 1
-              next
-            }
-            
-            # Let user choose which of multiple relevant values is true
-            vocab <- c('', q$dep$values[[sq$i]])
-            r$annotation_type <- 'dropdown'
-            
-            break
-            
-          }
-          
-          # If an entire annotation category is automatically fillable, this should activate
-          if(sq$i > length(q$dep$values)) {
-            a$answers[[q$key]] <- paste(q$answers, collapse = ';') # answers for each iterate saved between semicolons
-            a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
-            next
-          }
-          
-        }
-        
-        break
-        
-      }
-    }
-    
-    # Check if all remaining questions are inapplicable
-    if(length(a$unasked) == 0 || all_inapplicable) {
-      if(a$i < nrow(r$photos_not_done)) {
-        r$annotation_type <- 'photo_finished'
-      } else {
-        r$annotation_type <- 'all_finished'
-      }
-    }
-  }
-  
-  
-  observeEvent(input$begin, {
-    
-    if(!is.null(input$resume_file$datapath)) {
-      r$photos_not_done <- r$photo_df[!r$photo_df$name %in% r$old_annotations$filename,]
-    } else {
-      r$photos_not_done <- r$photo_df
-    }
-
-    a$metadata$filename <- r$photos_not_done$name[[a$i]]
-
-    initialize_photo()
-    
-    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
-    
-  }, ignoreInit = TRUE)
+    sq$n <- nrow(a$observations)
+    sq$i <- 1
+    q$i <- q$i + 1
+    render_next_question()
+  })
   
   # Watch for manual reset button
   observeEvent(input$reset_photo, {
     initialize_photo()
   })
   
-  # Function to add current photo's annotations to a data frame 
+  # Add current photo's annotations to the master dataframe
   intermediate_save <- function() {
-    
-    r$annotations[a$i,] <- NA
-    r$annotations[a$i, names(r$metadata)] <- r$metadata
-    r$annotations[a$i, names(a$metadata)] <- a$metadata
-    r$annotations[a$i, names(a$answers)]  <- a$answers
-    r$annotations[a$i,'notes'] <- ifelse(input$notes == '', 'None', gsub("\r?\n|\r|\t", " ", input$notes))
-
+    # Should probably make these more automatic in case metadata changes
+    a$annotations$annotator_id <- a$metadata$annotator_id
+    a$annotations$session_start_time <- a$metadata$session_start_time
+    a$annotations$filename <- a$metadata$filename
+    a$annotations$photo_annotation_start <- a$metadata$photo_annotation_start
+    a$annotations$notes <- ifelse(input$notes == '', 'None', gsub("\r?\n|\r|\t", " ", input$notes))
+    r$annotations <- rbind(r$annotations, a$annotations)
+    a$observations$filename <- a$metadata$filename
+    a$observations$photo_annotation_start <- a$metadata$photo_annotation_start
+    r$observations <- rbind(r$observations, a$observations)
+    if(a$i < nrow(r$photos_not_done)) {
+      a$i <- a$i + 1
+      initialize_photo()
+    } else {
+      r$annotation_type <- 'done'
+    }
   }
   
-  # Detect when an answer is entered via drop-down menu
-  observeEvent(input$current_key, {
-    if(input$current_key != '') {
-      isolate({
-        
-        # Add the answer to a list
-        q$answers[[sq$i]] <- input$current_key
-        
-        # Iterate through sub-items asking same question
-        sq$i <- sq$i + 1
-        if(sq$i <= length(q$dep$values)) {
-          for(i in sq$i:length(q$dep$values)) {
-            
-            # No values are relevant; fill in NA and move to the next sub-item
-            if(length(q$dep$values[[sq$i]]) == 0) {
-              q$answers[[sq$i]] <- 'NA'
-              sq$i <- sq$i + 1
-              next
-            }
-            
-            # Only one value is relevant; add it automatically and move to the next
-            if(length(q$dep$values[[sq$i]]) == 1) {
-              q$answers[[sq$i]] <- q$dep$values[[sq$i]]
-              sq$i <- sq$i + 1
-              next
-            }
-            
-            # Let user choose which of multiple relevant values is true
-            vocab <- c('', q$dep$values[[sq$i]])
-            updateSelectInput(session, 'current_key', choices = vocab, selected = '')
-            break
-          }
-        }
-        
-        # Finalize question and move to the next
-        if(sq$i > length(q$dep$values)) {
-          a$answers[[q$key]] <- paste(q$answers, collapse = ';') # answers for each iterate saved between semicolons
-          a$unasked <- a$unasked[!a$unasked %in% q$i]  # Remove the question from the unasked list
-          render_next_question()  # Re-check all unasked questions after an answer
-        }
-          
-      })
-    }
-  }, ignoreNULL = FALSE, ignoreInit = TRUE)
-
   # Move to next photo when 'Next' button is clicked
   observeEvent(input$next_photo, {
-    
     intermediate_save()
-    
-    a$i <- a$i + 1
-    a$metadata$filename <- r$photos_not_done$name[[a$i]]
-
-    updateTextAreaInput(session, 'notes', value = '')
-    
-    initialize_photo()
-    
   })
   
   # Save old and new combined annotations
   output$save_file <- downloadHandler(
     filename = function() {
-      paste0("annotations_", Sys.Date(), ".tsv")
+      paste0("annotations_", Sys.Date(), ".zip")
     },
     content = function(file) {
       # If the current photo was finished, add it to the data; otherwise don't
-      if(length(a$unasked) == 0) {
+      if(q$i >= length(r$parsed) & sq$i > nrow(a$observations)) {
         intermediate_save()
       } else {
         initialize_photo()
       }
-      old_and_new <- rbind(r$old_annotations, r$annotations)
-      write.table(old_and_new, file, quote = FALSE, sep = '\t', row.names = FALSE)
+      
+      # Create some pre-processed outputs
+      merged_long <- merge(r$annotations, r$observations, by=names(a$metadata))
+      merged_wide <- r$annotations
+      for(key in r$observation_keys) {
+        for(row in 1:nrow(merged_wide)) {
+          idx <- which(apply(r$observations[,names(a$metadata)], 1, \(x) all(sapply(seq_along(x), \(y) x[[y]] == merged_wide[row,names(a$metadata)[[y]]]))))
+          merged_wide[row,key] <- paste(r$observations[idx,key], collapse=';')
+        }
+      }
+      
+      # Write the multiple outputs in a temporary directory
+      tmpdir <- file.path(tempdir(), as.integer(Sys.time()))
+      dir.create(tmpdir)
+
+      write.table(r$annotations, file.path(tmpdir, 'photo_annotations.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      write.table(r$observations, file.path(tmpdir, 'within_photo_observations.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      write.table(merged_long, file.path(tmpdir, 'merged_long.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      write.table(merged_wide, file.path(tmpdir, 'merged_wide.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      
+      if(nrow(r$old_annotations) > 0) {
+        old_and_new <- rbind(r$old_annotations, merged_long)
+        write.table(old_and_new, file.path(tmpdir, 'merged_long_with_old_annotations.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      }
+      
+      # Serve a single .zip file with all the files
+      zip(
+        zipfile = file,
+        files = list.files(tmpdir, full.names = TRUE),
+        flags = '-j'  # just include the files themselves
+      )
     }
   )
 
