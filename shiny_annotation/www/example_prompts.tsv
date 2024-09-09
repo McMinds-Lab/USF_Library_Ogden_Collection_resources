@@ -1,9 +1,9 @@
 key	values	question_text	dependencies
 photo_type	benthic,landscape,social,specimen,other	What is the overall photo type?	NA
-point_coordinates 	benthic_invert	Click each Scleractinian coral or other benthic invert	photo_type:benthic,landscape,specimen
-point_coordinates 	fish	Click each fish	photo_type:benthic,landscape,specimen
-point_coordinates 	algae	Click each algae	photo_type:benthic,landscape,specimen
-point_coordinates 	other	Click anything else to specifically annotate	photo_type:any
+point_coordinates	benthic_invert	Click each Scleractinian coral or other benthic invert	photo_type:benthic,landscape,specimen
+point_coordinates	fish	Click each fish	photo_type:benthic,landscape,specimen
+point_coordinates	algae	Click each algae	photo_type:benthic,landscape,specimen
+point_coordinates	other	Click anything else to specifically annotate	photo_type:any
 growth_form	boulder,branching,plates,meandroid,solitary,encrusting,fleshy	What is the growth form of the invert?	observation_type:benthic_invert
 taxonomy:genus,species,family,order,class,phylum	Porites_astreoides,Siderastrea_siderea,Orbicella_annularis	To what {key} does this belong?	growth_form:boulder
 taxonomy:genus,species,family,order,class,phylum	Porites_porites,Acropora_cervicornis	To what {key} does this belong?	growth_form:branching
