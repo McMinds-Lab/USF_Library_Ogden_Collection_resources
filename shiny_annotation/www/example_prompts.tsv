@@ -1,14 +1,15 @@
 key	values	question_text	dependencies
 photo_type	benthic,landscape,social,specimen,other	What is the overall photo type?	NA
-point_coordinates	benthic_invert	Click each Scleractinian coral or other benthic invert	photo_type:benthic,landscape,specimen
-box_coordinates	fish	Drag a box around each fish or group of fish	photo_type:benthic,landscape,specimen
-point_coordinates	algae	Click each algae	photo_type:benthic,landscape,specimen
-point_coordinates	other	Click anything else to specifically annotate	photo_type:any
-growth_form	boulder,branching,plates,meandroid,solitary,encrusting,fleshy	What is the growth form of the invert?	observation_type:benthic_invert
+point_coordinates	benthic_invert	Click each coral or other benthic invert	photo_type:benthic,landscape,specimen
+growth_form	boulder,branching,plates,meandroid,solitary,encrusting,fleshy	What is the growth form of the highlighted invert?	observation_type:benthic_invert
 taxonomy:genus,species,family,order,class,phylum	Porites_astreoides,Siderastrea_siderea,Orbicella_annularis,Orbicella_faveolata	To what {key} does this belong?	growth_form:boulder
 taxonomy:genus,species,family,order,class,phylum	Porites_porites,Acropora_cervicornis	To what {key} does this belong?	growth_form:branching
 taxonomy:phylum	Palythoa,Porifera,Bryozoa,Ascidiacea	To what {key} does this belong?	growth_form:fleshy
 taxonomy:class	Calcarea,Demospongiae	To what {key} does this belong?	phylum:Porifera
 taxonomy:class	Ascidiacea	To what {key} does this belong?	observation_type:benthic_invert;phylum:Chordata
 disease_type	none,black band disease,white band disease,bleaching,dead,other,unknown	Does it show signs of disease?	observation_type:benthic_invert
+point_coordinates	algae	Click each algae	photo_type:benthic,landscape,specimen
+box_coordinates	fish	Drag a box around each fish or group of fish	photo_type:benthic,landscape,specimen
 taxonomy:family,order,class,phylum	Pomacentridae,Scaridae	To what {key} does this belong?	observation_type:fish
+box_coordinates	other	Drag a box around anything else you want to annotate	photo_type:any
+observation_notes	unstructured_text	Add any notes specific to the highlighted observation	observation_type:other

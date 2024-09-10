@@ -258,9 +258,9 @@ server <- function(input, output, session) {
     r$aux_files <- r$aux_data <- setNames(vector("list", length(aux_names)), aux_names)
     
     # Primary data storage for annotations associated with whole photo
-    # Includes timestamps, annotator ID, and other metadata in addition to custom annotations
+    # Includes timestamps, annotator ID, and other metadata in addition to custom annotations and an extra column for notes
     r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + length(r$photo_keys) + 1, nrow = 0)), 
-                              c(names(r$metadata), names(a$metadata), r$photo_keys, 'notes'))
+                              c(names(r$metadata), names(a$metadata), r$photo_keys, 'photo_notes'))
     
     # Primary data storage for annotations associated with specific coordinate-based observations within the photos
     # Includes photo name and timestamp to link to photo-wide observations for merging, in addition to custom annotations
@@ -411,9 +411,10 @@ server <- function(input, output, session) {
     req(q$i, sq$i)
     if(q$i > length(r$parsed)) return(NULL)
     if(!r$parsed[[q$i]]$is_observation) return(NULL)
-    idx_points <- which(a$observations$point_or_box == 'point')
-    req(idx_points)
-    current_coords <- lapply(strsplit(a$observations$coordinates[idx_points], ','), as.numeric)
+    req(nrow(a$observations) > 0)
+    
+    current_coords <- lapply(strsplit(a$observations$coordinates, ','), as.numeric)
+    is_point <- a$observations$point_or_box == 'point'
 
     # Get actual image size with external javascript function
     session$sendCustomMessage('getImageDimensions', list())
@@ -430,21 +431,29 @@ server <- function(input, output, session) {
     for(i in seq_along(current_coords)) {
       # Current item red; others in same category orange; others grey; all with transparency
       picking_now <- r$parsed[[q$i]]$keys[[1]] == 'observation_type'
-      typematch <- a$observations$observation_type[idx_points[[i]]] == a$observations$observation_type[sq$i]
-      current_color <- if(idx_points[[i]] == sq$i & (!picking_now | sq$i > sq$n)) {
+      typematch <- a$observations$observation_type[i] == a$observations$observation_type[sq$i]
+      current_color <- if(i == sq$i & (!picking_now | sq$i > sq$n)) {
         adjustcolor("red", alpha.f = 0.5) 
       } else if(typematch & (!picking_now | sq$i > sq$n)) {
         adjustcolor("orange", alpha.f = 0.6)
       } else {
         adjustcolor("black", alpha.f = 0.5)
       }
-      # y-axis is reversed for plots compared to images
-      points(current_coords[[i]][[1]], 
-             input$image_height - current_coords[[i]][[2]], 
-             col = current_color, 
-             pch = 21, 
-             bg  = current_color, 
-             cex = point.cex)
+      if(is_point[i]) {
+        points(current_coords[[i]][[1]],
+               input$image_height - current_coords[[i]][[2]], # y-axis is reversed for plots compared to images
+               col = current_color,
+               pch = 21,
+               bg  = current_color,
+               cex = point.cex)
+      } else {
+        rect(current_coords[[i]][[1]],
+             input$image_height - current_coords[[i]][[2]],
+             current_coords[[i]][[3]],
+             input$image_height - current_coords[[i]][[4]],
+             border = current_color,
+             lwd = point.cex)
+      }
     }
 
   }, bg = 'transparent')
@@ -475,14 +484,17 @@ server <- function(input, output, session) {
       ),
       coordinate = list(
         renderText({r$parsed[[q$i]]$question_text}),
-        br(),
-        renderText({'Be aware that the shinylive export of this app currently has bugs for coordinate selection! Download the app and run it locally, and these annotations should work.'}),
+        HTML('<p>The current item is <span style="color: red">red</span>, related items are <span style="color: orange">orange</span>, and all others are <span style="color: grey">grey</span></p>'),
         div(
           actionButton("remove_coord",  "Undo click"),
           actionButton("next_question", "Next question")
         ),
         downloadButton("save_file", "Discard this photo and save the rest"),
         actionButton("reset_photo", "Reset photo")
+      ),
+      unstructured_text = list(
+        textAreaInput("extra_notes", r$parsed[[q$i]]$question_text, rows = 4, resize = 'both'),
+        actionButton("submit_extra_notes",  "Submit observation notes")
       ),
       photo_finished = list(
         renderText({"Structured questions finished - finish notes and click Next, Save, or Reset\n"}),
@@ -586,6 +598,12 @@ server <- function(input, output, session) {
       q$i <- q$i + 1
       initialize_prompt()
       return(render_next_question())
+    }
+    
+    if(r$parsed[[q$i]]$values[[1]] == 'unstructured_text') {
+      # Unstructured text prompt
+      r$annotation_type <- 'unstructured_text'
+      return()
     }
       
     # Either this is a photo-wide annotation or there are more within-photo observations to check
@@ -790,6 +808,13 @@ server <- function(input, output, session) {
     initialize_photo()
   })
   
+  observeEvent(input$submit_extra_notes, {
+    a$observations[sq$i,r$parsed[[q$i]]$keys] <- ifelse(input$extra_notes == '', 'None', gsub("\r?\n|\r|\t", " ", input$extra_notes))
+    sq$i <- sq$i + 1
+    updateTextAreaInput(session, 'extra_notes', value = '')
+    render_next_question()
+  }, ignoreInit = TRUE)
+  
   # Add current photo's annotations to the master dataframe
   intermediate_save <- function() {
     # Should probably make these more automatic in case metadata changes
@@ -797,7 +822,7 @@ server <- function(input, output, session) {
     a$annotations$session_start_time <- a$metadata$session_start_time
     a$annotations$filename <- a$metadata$filename
     a$annotations$photo_annotation_start <- a$metadata$photo_annotation_start
-    a$annotations$notes <- ifelse(input$notes == '', 'None', gsub("\r?\n|\r|\t", " ", input$notes))
+    a$annotations$photo_notes <- ifelse(input$notes == '', 'None', gsub("\r?\n|\r|\t", " ", input$notes))
     r$annotations <- rbind(r$annotations, a$annotations)
     a$observations$filename <- a$metadata$filename
     a$observations$photo_annotation_start <- a$metadata$photo_annotation_start
