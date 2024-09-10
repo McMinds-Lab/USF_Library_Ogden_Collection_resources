@@ -26,11 +26,7 @@ ui <- fluidPage(
     mainPanel(
       div(
         style = "position:relative; display:inline-block;",
-        imageOutput("current_photo",
-                    width  = '100%',
-                    height = '100%',
-                    click  = "photo_click",
-                    brush  = brushOpts(id = "photo_brush", resetOnNew = TRUE)),
+        uiOutput("photo_ui"),
         plotOutput("overlay_plot", 
                    width  = "100%", 
                    height = '100%')
@@ -385,6 +381,26 @@ server <- function(input, output, session) {
   
   # Before we can respond to user input here, we will need to prepare the upcoming UI elements and define some functions
   # Load the photo to annotate
+  output$photo_ui <- renderUI({
+    req(a$i, q$i)
+    click <- NULL
+    brush <- NULL
+    if(q$i <= length(r$parsed)) {
+      if(r$parsed[[q$i]]$is_observation & length(r$parsed[[q$i]]$question_text) == 1) {
+        if(names(r$parsed[[q$i]]$question_text) == 'point_coordinates') {
+          click <- clickOpts(id = "photo_click", clip = FALSE)
+        } else {
+          brush <- brushOpts(id = "photo_brush", clip = FALSE, resetOnNew = TRUE)
+        }
+      }
+    }
+    imageOutput("current_photo",
+                width  = '100%',
+                height = '100%',
+                click  = click,
+                brush  = brush)
+  })
+
   output$current_photo <- renderImage({
     req(r$photos_not_done, a$i)
     list(src = r$photos_not_done$datapath[[a$i]])
@@ -414,7 +430,7 @@ server <- function(input, output, session) {
     for(i in seq_along(current_coords)) {
       # Current item red; others in same category orange; others grey; all with transparency
       picking_now <- r$parsed[[q$i]]$keys[[1]] == 'observation_type'
-      typematch <- a$observations$observation_type[idx_points[[i]]] == a$observations$observation_type[idx_points[[sq$i]]]
+      typematch <- a$observations$observation_type[idx_points[[i]]] == a$observations$observation_type[sq$i]
       current_color <- if(idx_points[[i]] == sq$i & (!picking_now | sq$i > sq$n)) {
         adjustcolor("red", alpha.f = 0.5) 
       } else if(typematch & (!picking_now | sq$i > sq$n)) {
@@ -530,10 +546,10 @@ server <- function(input, output, session) {
         # For each dependency, annotation can match ANY of the listed values
         if(x %in% r$observation_keys) {
           # Current dependency is associated with within-photo observations
-          a$observations[sq$i,x] %in% r$parsed[[q$i]]$dependencies[[x]]
+          a$observations[sq$i,x] %in% r$parsed[[q$i]]$dependencies[[x]] | (r$parsed[[q$i]]$dependencies[[x]] == 'any' & !is.na(a$observations[sq$i,x]))
         } else {
           # Current dependency is associated with photo-wide annotations
-          a$annotations[1,x] %in% r$parsed[[q$i]]$dependencies[[x]]
+          a$annotations[1,x] %in% r$parsed[[q$i]]$dependencies[[x]] | (r$parsed[[q$i]]$dependencies[[x]] == 'any' & !is.na(a$annotations[1,x]))
         }
       }))
     }
@@ -735,31 +751,28 @@ server <- function(input, output, session) {
 
   # Detect when a point coordinate is being submitted         
   observeEvent(input$photo_click, {
-    if(names(r$parsed[[q$i]]$question_text) == 'point_coordinates') {
-      sq$i <- sq$i + 1
-      a$observations[sq$i,'observation_type'] <- r$parsed[[q$i]]$values
-      a$observations[sq$i,'point_or_box'] <- 'point'
-      a$observations[sq$i,'coordinates'] <- paste(input$photo_click[c('x','y')], collapse = ',')
-    }
+    req(names(r$parsed[[q$i]]$question_text) == 'point_coordinates')
+    sq$i <- sq$i + 1
+    a$observations[sq$i,'observation_type'] <- r$parsed[[q$i]]$values
+    a$observations[sq$i,'point_or_box'] <- 'point'
+    a$observations[sq$i,'coordinates'] <- paste(input$photo_click[c('x','y')], collapse = ',')
   })
   
   # Detect a bounding box annotation
   observeEvent(input$photo_brush, {
-    if(names(r$parsed[[q$i]]$question_text) == 'box_coordinates') {
-      sq$i <- sq$i + 1
-      a$observations[sq$i,'observation_type'] <- r$parsed[[q$i]]$values
-      a$observations[sq$i,'point_or_box'] <- 'box'
-      a$observations[sq$i,'coordinates'] <- paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse = ',')
-    }
+    req(names(r$parsed[[q$i]]$question_text) == 'box_coordinates')
+    sq$i <- sq$i + 1
+    a$observations[sq$i,'observation_type'] <- r$parsed[[q$i]]$values
+    a$observations[sq$i,'point_or_box'] <- 'box'
+    a$observations[sq$i,'coordinates'] <- paste(input$photo_brush[c('xmin','ymin','xmax','ymax')], collapse = ',')
   })
   
   # Undo a coordinate selection
   observeEvent(input$remove_coord, {
     # Make sure not to remove observations from previous questions
-    if(sq$i > sq$n) {
-      a$observations <- a$observations[-sq$i,]
-      sq$i <- sq$i - 1
-    }
+    req(sq$i > sq$n)
+    a$observations <- a$observations[-sq$i,]
+    sq$i <- sq$i - 1
   })
   
   # Detect when point coordinate or bounding box annotations are finished for a given question      
