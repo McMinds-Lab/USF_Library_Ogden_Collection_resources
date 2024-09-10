@@ -456,9 +456,12 @@ server <- function(input, output, session) {
   # Display various data and messages
   output$info <- renderText({
     req(a$i)
+    annotations <- if(nrow(a$annotations) > 0) paste0(sapply(r$photo_keys, \(x) if(!is.na(a$annotations[[x]])) paste0(x, ': ', a$annotations[[x]], '\n') else ''), collapse='') else ''
+    observations <- if(nrow(a$observations) > 0) paste0(sapply(r$observation_keys, \(x) if(!is.na(a$observations[sq$i,x])) paste0(x, ': ', a$observations[sq$i,x], '\n') else ''), collapse='') else ''
     paste0(
       paste0('photo ', a$i, ' (', nrow(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n')),
-      paste0(sapply(names(a$answers), \(x) paste0(x, ': ', a$answers[[x]], '\n')), collapse=''),
+      annotations,
+      observations,
       paste(r$messages, collapse = '\n')
     )
   })
