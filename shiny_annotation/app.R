@@ -81,7 +81,14 @@ server <- function(input, output, session) {
   
   # hardcode a couple of variables that will be reused a few times
   coordinate_types <- c('point_coordinates', 'box_coordinates')
-  
+  # currently only allowable ranks that can be specified in prompt file, in order (others can exist in aux file)
+  rankorder <- c("subspecies", "species", "subgenus", "genus",
+                 "subtribe", "tribe", "subfamily", "family", "superfamily",
+                 "infraorder", "suborder", "order", "superorder",
+                 "infraclass", "subclass", "class", "superclass",
+                 "infraphylum", "subphylum", "phylum",
+                 "subkingdom", "kingdom", "realm")
+
   # Reactive values are variables that have global scope and depend on things like user input
   # Unlike regular variables, they can be monitored by 'observers' to automatically trigger events whenever they change
   
@@ -320,18 +327,6 @@ server <- function(input, output, session) {
         } else {
           break
         }
-      }
-    }
-    
-    # Starting at root find the order of rank names
-    attr(res, 'rankorder') <- character()
-    tax <- res$col.ID[res$col.parentID == '']
-    while(TRUE) {
-      attr(res, 'rankorder') <- c(attr(res, 'rankorder'), res$col.rank[res$col.ID %in% tax])
-      tax <- res$col.ID[res$col.parentID %in% tax]
-      if(length(tax) == 0) {
-        attr(res, 'rankorder') <- unique(rev(attr(res, 'rankorder')))
-        break
       }
     }
     
@@ -600,22 +595,29 @@ server <- function(input, output, session) {
       aux_filt <- filter_aux(gsub('_', ' ', r$parsed[[q$i]]$values), r$aux_data[[1]])
       if(sq$j > 1) {
         # If not starting rank, then replace the filtered options based on below logic
-        rankorder <- attr(aux_filt, 'rankorder')
         # Filter and order ranks in data
         base <- a[[an_or_obs]][row,rankorder[rankorder %in% keys]]
         base <- base[!is.na(base)]
         # find whether higher or lower rank than previous iteration
         if(which(keys[[sq$j]] == rankorder) > which(keys[[sq$j-1]] == rankorder)) {
           # If current rank is higher than previous
-          base <- base[base != 'unidentifiable']
-          if(length(base) > 0) {
+          if(any(base != 'unidentifiable')) {
             # If any lower taxa were identified, then their ancestor at the given rank can be automatically filled
-            aux_filt <- filter_aux(gsub('_', ' ', base), aux_filt)
+            aux_filt <- filter_aux(gsub('_', ' ', base[base != 'unidentifiable']), aux_filt)
             aux_filt <- aux_filt[aux_filt$col.rank == keys[[sq$j]],]
             # Rank might not exist in database, returning NA
             a[[an_or_obs]][row,keys[[sq$j]]] <- if(nrow(aux_filt) == 1) aux_filt[,'col.scientificName'] else NA
             sq$j <- sq$j + 1
             return(render_next_question())
+          } else if(any(base == 'unidentifiable')) {
+            # If the lower rank was unidentifiable, but the higher rank just repeats the same options, then it is also unidentifiable
+            nhighertax <- nrow(aux_filt[aux_filt$col.rank == keys[[sq$j]],])
+            nlowertax <- length(sq$values) - 1 # because we know we added the unidentifiable option
+            if(nhighertax == nlowertax) {
+              a[[an_or_obs]][row,keys[[sq$j]]] <- 'unidentifiable'
+              sq$j <- sq$j + 1
+              return(render_next_question())
+            }
           }
         } else {
           # If current rank is lower than previous
