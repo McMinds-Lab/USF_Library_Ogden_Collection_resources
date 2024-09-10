@@ -262,13 +262,61 @@ server <- function(input, output, session) {
     }
   })
   
+  # Filter the auxiliary taxa file so it's quicker to search through
+  # Currently assumes only one aux file and only the default coldp tested
+  filter_aux <- function() {
+    targets <- unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$aux_name)>0)], \(y) y$values))))
+    res <- r$aux_data[[1]][r$aux_data[[1]]$col.scientificName %in% targets,]
+    
+    missinghigher <- r$aux_data[[1]]$col.ID[r$aux_data[[1]]$col.ID %in% res$col.parentID]
+    missinghigher <- missinghigher[!missinghigher %in% res$col.ID]
+    
+    missinglower <- r$aux_data[[1]]$col.ID[r$aux_data[[1]]$col.parentID %in% res$col.ID]
+    missinglower <- missinglower[!missinglower %in% res$col.ID]
+    
+    if(length(missinghigher) > 0) {
+      higherres <- r$aux_data[[1]][r$aux_data[[1]]$col.ID %in% missinghigher,]
+      while(TRUE) {
+        res <- rbind(res, higherres)
+        
+        missinghigher <- r$aux_data[[1]]$col.ID[r$aux_data[[1]]$col.ID %in% higherres$col.parentID]
+        missinghigher <- missinghigher[!missinghigher %in% res$col.ID]
+        
+        if(length(missinghigher) > 0) {
+          higherres <- r$aux_data[[1]][r$aux_data[[1]]$col.ID %in% missinghigher,]
+        } else {
+          break
+        }
+      }
+    }
+    
+    if(length(missinglower) > 0) {
+      lowerres <- r$aux_data[[1]][r$aux_data[[1]]$col.ID %in% missinglower,]
+      while(TRUE) {
+        res <- rbind(res, lowerres) 
+        
+        missinglower <- r$aux_data[[1]]$col.ID[r$aux_data[[1]]$col.parentID %in% lowerres$col.ID]
+        missinglower <- missinglower[!missinglower %in% res$col.ID]
+        
+        if(length(missinglower) > 0) {
+          lowerres <- r$aux_data[[1]][r$aux_data[[1]]$col.ID %in% missinglower,]
+        } else {
+          break
+        }
+      }
+    }
+    
+    r$aux_data[[1]] <- res
+  }
+  
   # If the aux_file UI is displayed and the user then chooses an aux_file, store it in the list
   # If there are more aux files to specify, increment the counter to refresh the fileInput prompt
   # Otherwise, trigger the photo input step
   observeEvent(input$aux_file, {
     req(input$aux_file)
     r$aux_files[[r$aux_i]] <- input$aux_file
-    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='')
+    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='', fill = TRUE)
+    filter_aux()
     if(r$aux_i < length(r$aux_files)) {
       r$aux_i <- r$aux_i + 1
     } else {
@@ -278,9 +326,10 @@ server <- function(input, output, session) {
   
   # If the user chooses the default Catalog of Life taxonomy rather than specifying their own aux file
   observeEvent(input$default_aux_file, {
-    r$aux_files[[r$aux_i]] <- list(name     = '',
-                                   datapath = 'www/')
-    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='')
+    r$aux_files[[r$aux_i]] <- list(name     = 'Catalogue of Life, version 2024-08-29 (species)',
+                                   datapath = 'www/1eefaf9f-adb0-4d7b-a980-4884078e3508/NameUsage.tsv')
+    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='', quote='')
+    filter_aux()
     if(r$aux_i < length(r$aux_files)) {
       r$aux_i <- r$aux_i + 1
     } else {
@@ -355,6 +404,7 @@ server <- function(input, output, session) {
     req(a$i)
     paste0(
       'Prompts file (', nrow(r$prompts), ' prompts): ', r$prompts_file$name, '\n',
+      'Auxiliary file (', names(r$aux_files)[[1]], '): ', r$aux_files[[1]]$name, '\n',
       nrow(r$photo_df), ' photos\n',
       ifelse(is.null(input$resume_file$datapath), 
              'No old annotations - starting from scratch!\n', 
@@ -444,7 +494,8 @@ server <- function(input, output, session) {
           # Either this is a photo-wide annotation or there are more within-photo observations to check
           if(length(r$parsed[[q$i]]$aux_name) > 0) {
             # Send signal to begin auxiliary file traversal (make sure to enable an 'unidentifiable' option and autofill when only one possibility)
-    
+            # Currently just assume single file
+            
           } else {
             if(length(r$parsed[[q$i]]$values) == 1) {
               # Only one option; autofill it and move on
