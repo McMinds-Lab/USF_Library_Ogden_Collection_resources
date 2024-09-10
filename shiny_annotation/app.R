@@ -475,6 +475,7 @@ server <- function(input, output, session) {
       ),
       coordinate = list(
         renderText({r$parsed[[q$i]]$question_text}),
+        br(),
         renderText({'Be aware that the shinylive export of this app currently has bugs for coordinate selection! Download the app and run it locally, and these annotations should work.'}),
         div(
           actionButton("remove_coord",  "Undo click"),
@@ -508,10 +509,12 @@ server <- function(input, output, session) {
     req(a$i)
     annotations <- if(nrow(a$annotations) > 0) paste0(sapply(r$photo_keys, \(x) if(!is.na(a$annotations[[x]])) paste0(x, ': ', a$annotations[[x]], '\n') else ''), collapse='') else ''
     observations <- if(nrow(a$observations) > 0) paste0(sapply(r$observation_keys, \(x) if(!is.na(a$observations[sq$i,x])) paste0(x, ': ', a$observations[sq$i,x], '\n') else ''), collapse='') else ''
+    coordinate_picking <- if(q$i <= length(r$parsed)) if(names(r$parsed[[q$i]]$question_text)[[1]] %in% coordinate_types) paste0(sq$i - sq$n, ' items identified\n') else NULL
     paste0(
       paste0('photo ', a$i, ' (', nrow(r$photos_not_done) - a$i, ' photos left): ', paste(a$metadata$filename, '\n')),
       annotations,
       observations,
+      coordinate_picking,
       paste(r$messages, collapse = '\n')
     )
   })
