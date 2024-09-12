@@ -92,6 +92,7 @@ server <- function(input, output, session) {
   r <- reactiveValues(workflow_step     = 'annotator_id',
                       prompts_file      = NULL,
                       prompts           = NULL,
+                      parsed            = NULL,
                       aux_files         = list(),
                       aux_data          = list(),
                       aux_i             = 1,
@@ -108,9 +109,10 @@ server <- function(input, output, session) {
                                                session_start_time = NA))
   
   # Define variables that are reset for each photo
-  a <- reactiveValues(i            = NULL,   # which photo are we on
-                      annotations  = NULL,   # add relevant inputs to this directly (single row)
-                      observations = NULL,   # add relevant inputs to this directly (row for each coordinate selection in photo)
+  a <- reactiveValues(i            = NULL, # which photo are we on
+                      annotations  = NULL, # add relevant inputs to this directly (single row)
+                      observations = NULL, # add relevant inputs to this directly (row for each coordinate selection in photo)
+                      idx_type     = NULL, # What is currently iterating
                       metadata     = list(filename               = NA,
                                           photo_annotation_start = NA))
   
@@ -121,6 +123,8 @@ server <- function(input, output, session) {
   sq <- reactiveValues(n = 0,    # how many lines of a$observations exist before the current question
                        i = NULL, # which line of a$observations are we on
                        j = NULL, # which stage of a question are we on (e.g. when using an external taxonomy)
+                       aux_filt = NULL,
+                       indistinguishables = NULL,
                        question_text = NULL,
                        values = NULL) # what are the values that are currently available for a drop-down
   
@@ -194,8 +198,8 @@ server <- function(input, output, session) {
         # If the keys field has a ':', then it names an auxiliary file and the values to filter from it
         aux_name <- keys_sep[[1]]
         keys <- strsplit(keys_sep[[2]], ',')[[1]]
-        # Since aux files lead through multiple promps, the question text can be configured to specify the current key by placing {key} in the string
-        question_text <- setNames(sapply(keys, \(y) gsub('{.*}', y, x[['question_text']], perl=TRUE)), keys)
+        # Since aux files lead through multiple prompts, the question text can be configured to specify the current key by placing {key} in the string
+        question_text <- setNames(sapply(keys, \(y) gsub('{key}', y, x[['question_text']], perl=TRUE)), keys)
       } else {
         # No aux files
         aux_name <- character(0)
@@ -230,21 +234,21 @@ server <- function(input, output, session) {
       
       # coordinate pickers are the top level for sub-photo observations
       if(r$parsed[[i]]$keys[[1]] == 'observation_type') {
-        r$parsed[[i]]$is_observation <- TRUE
+        r$parsed[[i]]$which_df <- 'observations'
         r$observation_keys <- unique(c(r$observation_keys, r$parsed[[i]]$keys))
         next
       }
       
       # anything else without dependencies must be photo-wide
       if(length(r$parsed[[i]]$dependencies) == 0) {
-        r$parsed[[i]]$is_observation <- FALSE
+        r$parsed[[i]]$which_df <- 'annotations'
         r$photo_keys <- unique(c(r$photo_keys, r$parsed[[i]]$keys))
         next
       }
       
       # if any dependency is a sub-observation, then so is this
-      r$parsed[[i]]$is_observation <- any(sapply(r$parsed, \(x) names(r$parsed[[i]]$dependencies) %in% r$observation_keys))
-      if(r$parsed[[i]]$is_observation) {
+      r$parsed[[i]]$which_df <- if(any(sapply(r$parsed, \(x) names(r$parsed[[i]]$dependencies) %in% r$observation_keys))) 'observations' else 'annotations'
+      if(r$parsed[[i]]$which_df == 'observations') {
         r$observation_keys <- unique(c(r$observation_keys, r$parsed[[i]]$keys))
       } else {
         r$photo_keys <- unique(c(r$photo_keys, r$parsed[[i]]$keys))
@@ -259,8 +263,13 @@ server <- function(input, output, session) {
     
     # Primary data storage for annotations associated with whole photo
     # Includes timestamps, annotator ID, and other metadata in addition to custom annotations and an extra column for notes
-    r$annotations <- setNames(data.frame(matrix(ncol = length(r$metadata) + length(a$metadata) + length(r$photo_keys) + 1, nrow = 0)), 
-                              c(names(r$metadata), names(a$metadata), r$photo_keys, 'photo_notes'))
+    r$annotations <- setNames(
+                       data.frame(
+                         matrix(ncol = length(r$metadata) + length(a$metadata) + length(r$photo_keys) + 1,
+                                nrow = 0)
+                       ),
+                       c(names(r$metadata), names(a$metadata), r$photo_keys, 'photo_notes')
+                     )
     
     # Primary data storage for annotations associated with specific coordinate-based observations within the photos
     # Includes photo name and timestamp to link to photo-wide observations for merging, in addition to custom annotations
@@ -369,7 +378,8 @@ server <- function(input, output, session) {
   
   # Respond to user photo choices
   observeEvent(input$default_photos, {
-    r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'), name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))[sample(2),]
+    r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'),
+                             name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))[sample(2),]
     r$workflow_step <- 'previous_annotations'
   }, ignoreInit = TRUE)
   
@@ -386,7 +396,7 @@ server <- function(input, output, session) {
     click <- NULL
     brush <- NULL
     if(q$i <= length(r$parsed)) {
-      if(r$parsed[[q$i]]$is_observation & length(r$parsed[[q$i]]$question_text) == 1) {
+      if(r$parsed[[q$i]]$which_df == 'observations' & length(r$parsed[[q$i]]$question_text) == 1) {
         if(names(r$parsed[[q$i]]$question_text) == 'point_coordinates') {
           click <- clickOpts(id = "photo_click", clip = FALSE)
         } else {
@@ -410,7 +420,7 @@ server <- function(input, output, session) {
   output$overlay_plot <- renderPlot({
     req(q$i, sq$i)
     if(q$i > length(r$parsed)) return(NULL)
-    if(!r$parsed[[q$i]]$is_observation) return(NULL)
+    if(r$parsed[[q$i]]$which_df == 'annotations') return(NULL)
     req(nrow(a$observations) > 0)
     
     current_coords <- lapply(strsplit(a$observations$coordinates, ','), as.numeric)
@@ -483,7 +493,7 @@ server <- function(input, output, session) {
         actionButton("reset_photo", "Reset photo")
       ),
       coordinate = list(
-        renderText({r$parsed[[q$i]]$question_text}),
+        renderText({if(q$i < length(r$parsed)) r$parsed[[q$i]]$question_text}),
         HTML('<p>The current item is <span style="color: red">red</span>, related items are <span style="color: orange">orange</span>, and all others are <span style="color: grey">grey</span></p>'),
         div(
           actionButton("remove_coord",  "Undo click"),
@@ -493,7 +503,7 @@ server <- function(input, output, session) {
         actionButton("reset_photo", "Reset photo")
       ),
       unstructured_text = list(
-        textAreaInput("extra_notes", r$parsed[[q$i]]$question_text, rows = 4, resize = 'both'),
+        textAreaInput("extra_notes", if(q$i < length(r$parsed)) r$parsed[[q$i]]$question_text, rows = 4, resize = 'both'),
         actionButton("submit_extra_notes",  "Submit observation notes")
       ),
       photo_finished = list(
@@ -531,6 +541,7 @@ server <- function(input, output, session) {
     )
   })
   
+  # Whenever a new question is rendered, these values need to be reset
   initialize_prompt <- function() {
     r$aux_i <- 1
     sq$n <- nrow(a$observations)
@@ -538,12 +549,75 @@ server <- function(input, output, session) {
     sq$j <- 1
   }
   
-  # Function that constructs and iterates through prompts
+  # Keep incrementation organized
+  increment_idx <- function(qis) {
+    if(qis == 'qi') {
+      q$i <- q$i + 1
+      initialize_prompt()
+    } else if(qis == 'sqi') {
+      sq$j <- 1
+      sq$i <- sq$i + 1
+    } else if(qis == 'sqj') {
+      sq$j <- sq$j + 1
+    }
+  }
+  
+  # When a prompt uses an auxiliary file, parse the hierarchy to determine the next question or autofill unique options
+  # Intended to ultimately be rather flexible, but for now assumes a single auxiliary file in 'coldp' biological taxonomy format from Catalog of Life
+  aux_hierarchy <- function() {
+    # Auxiliary file traversal
+    keys <- r$parsed[[q$i]]$keys
+    # Filter the database to taxa relevant to current prompt
+    if(sq$j == 1) {
+      sq$aux_filt <- filter_aux(gsub('_', ' ', r$parsed[[q$i]]$values), r$aux_data[[1]])
+      sq$indistinguishables <- character()
+    } else {
+      # If not at the starting rank, then replace the filtered options based on below logic
+      # Update taxa that can't be distinguished here. I know it's ugly.
+      if(!is.na(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]])) if(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]] == 'unidentifiable') sq$indistinguishables <- sort(unique(c(sq$indistinguishables, sq$aux_filt[,'col.ID'])))
+      # Filter and order ranks in data
+      ordered_keys <- rankorder[rankorder %in% keys]
+      current_taxonomy <- a[[r$parsed[[q$i]]$which_df]][sq$i,ordered_keys]
+      previous_ranknums <- which(!is.na(current_taxonomy))
+      current_taxonomy <- current_taxonomy[previous_ranknums]
+      if(length(current_taxonomy) > 0) {
+        current_ranknum <- match(keys[[sq$j]], ordered_keys)
+        identified <- previous_ranknums[current_taxonomy != 'unidentifiable']
+        if(length(identified) > 0) {
+          # If any previous ranks were identifiable, use the most precise one to further filter options
+          lowest_identified <- min(identified)
+          sq$aux_filt <- filter_aux(gsub('_', ' ', current_taxonomy[ordered_keys[lowest_identified]]), sq$aux_filt)
+        }
+        unidentified <- previous_ranknums[current_taxonomy == 'unidentifiable']
+        if(any(unidentified > current_ranknum) || (length(unidentified) > 0 && sum(sq$aux_filt$col.rank == keys[[sq$j]]) > 1 && identical(sort(sq$aux_filt$col.ID), sq$indistinguishables))) {
+          # If any previous unidentifiable ranks were higher than the current one, then it is too 
+          # Or, if all the current options were already indistinguishable in other iterations, then the current rank is also unidentifiable
+          sq$values <- 'unidentifiable'
+          return()
+        }
+      }
+    }
+    values <- sq$aux_filt$col.scientificName[sq$aux_filt$col.rank == keys[[sq$j]]]
+    if(length(values) == 0) {
+      sq$values <- NA
+    } else if(length(values) == 1) {
+      sq$values <- values
+    } else {
+      sq$values <- c(values, 'unidentifiable')
+    }
+    sq$question_text <- r$parsed[[q$i]]$question_text[[sq$j]]
+
+  }
+
+  # Construct prompts or autofill values using the indices and data stored in global reactives
   render_next_question <- function() {
     
     if(q$i > length(r$parsed)) {
+      # If question index is greater than the number of questions, then we are done with this photo
+      # Increment indices beyond relevant range to disable annotation plots
       q$i <- length(r$parsed) + 1
       sq$i <- nrow(a$observations) + 1
+      # Then activate prompts to continue to next photo or finalize session
       if(a$i < nrow(r$photos_not_done)) {
         r$annotation_type <- 'photo_finished'
       } else {
@@ -551,159 +625,71 @@ server <- function(input, output, session) {
       }
       return()
     }
-      
+    
+    if(r$parsed[[q$i]]$which_df == 'observations') {
+      # Current call is iterating through within-photo observations
+      a$idx_type <- 'sqi'
+      if(sq$i > nrow(a$observations) & r$parsed[[q$i]]$keys[[1]] != 'observation_type') {
+        # If observation index is greater than the number of observations 
+        # and we're not adding more via coordinate selection
+        # then we're done with this question
+        increment_idx('qi')
+        return(render_next_question())
+      }
+    } else {
+      # Current call is iterating through photo-wide annotations
+      a$idx_type <- 'qi'
+    }
+    
     if(length(r$parsed[[q$i]]$dependencies) == 0) {
       # If no dependencies, then always proceed
       fulfilled <- TRUE
+    } else if(length(r$parsed[[q$i]]$aux_name) > 0 & sq$j > length(r$parsed[[q$i]]$keys)) {
+      # If reaching end of auxiliary file traversal
+      fulfilled <- FALSE
     } else {
       # Only proceed if ALL dependencies are fulfilled
       fulfilled <- all(sapply(names(r$parsed[[q$i]]$dependencies), \(x) {
-        # For each dependency, annotation can match ANY of the listed values
-        if(x %in% r$observation_keys) {
-          # Current dependency is associated with within-photo observations
-          a$observations[sq$i,x] %in% r$parsed[[q$i]]$dependencies[[x]] | (r$parsed[[q$i]]$dependencies[[x]] == 'any' & !is.na(a$observations[sq$i,x]))
-        } else {
-          # Current dependency is associated with photo-wide annotations
-          a$annotations[1,x] %in% r$parsed[[q$i]]$dependencies[[x]] | (r$parsed[[q$i]]$dependencies[[x]] == 'any' & !is.na(a$annotations[1,x]))
-        }
+        # Is dependency a photo-wide annotation or a within-photo observation
+        deptype <- if(x %in% r$observation_keys) 'observations' else 'annotations'
+        # For each dependency, annotation can match ANY of the listed values (or have any value at all if the listed value is the special keyword 'any')
+        a[[deptype]][sq$i,x] %in% r$parsed[[q$i]]$dependencies[[x]] | (r$parsed[[q$i]]$dependencies[[x]] == 'any' & !is.na(a[[deptype]][sq$i,x]))
       }))
     }
     
     if(!fulfilled) {
-      # Question not applicable; move on
-      if(r$parsed[[q$i]]$is_observation & sq$i <= nrow(a$observations)) {
-        sq$i <- sq$i + 1
-        return(render_next_question())
-      } else {
-        q$i <- q$i + 1
-        initialize_prompt()
-        return(render_next_question())
-      }
+      # Question not applicable; move to next observation or annotation
+      increment_idx(a$idx_type)
+      return(render_next_question())
     }
-  
-    # shortcuts for later
-    an_or_obs <- if(r$parsed[[q$i]]$is_observation) 'observations' else 'annotations'
-    row <- if(r$parsed[[q$i]]$is_observation) sq$i else 1
-    keys <- r$parsed[[q$i]]$keys
 
-    if(keys[[1]] == 'observation_type') {
+    if(r$parsed[[q$i]]$keys[[1]] == 'observation_type') {
       # Send signal to update UI for coordinate selection
       sq$i <- nrow(a$observations)
       r$annotation_type <- 'coordinate'
       return()
-    } 
-    
-    if(r$parsed[[q$i]]$is_observation & sq$i > nrow(a$observations)) {
-      # All observations checked; move to next question
-      q$i <- q$i + 1
-      initialize_prompt()
-      return(render_next_question())
     }
     
     if(r$parsed[[q$i]]$values[[1]] == 'unstructured_text') {
-      # Unstructured text prompt
+      # Send signal to update UI for unstructured text prompt
       r$annotation_type <- 'unstructured_text'
       return()
     }
       
-    # Either this is a photo-wide annotation or there are more within-photo observations to check
     if(length(r$parsed[[q$i]]$aux_name) == 0) {
-      
       # No auxiliary file; prepare drop-down menu directly from prompts file
       sq$question_text <- r$parsed[[q$i]]$question_text
       sq$values <- r$parsed[[q$i]]$values
-      
     } else {
-      
-      # Currently just assume single aux file
-      if(sq$j > length(keys)) {
-        # Aux file traversal finished, increment to next observation or prompt
-        sq$j <- 1
-        if(r$parsed[[q$i]]$is_observation) {
-          sq$i <- sq$i + 1
-        } else {
-          q$i <- q$i + 1
-          initialize_prompt()
-        }
-        return(render_next_question())
-      }
-      
-      # Auxiliary file traversal
-      aux_filt <- filter_aux(gsub('_', ' ', r$parsed[[q$i]]$values), r$aux_data[[1]])
-      if(sq$j > 1) {
-        # If not starting rank, then replace the filtered options based on below logic
-        # Filter and order ranks in data
-        base <- a[[an_or_obs]][row,rankorder[rankorder %in% keys]]
-        base <- base[!is.na(base)]
-        # find whether higher or lower rank than previous iteration
-        if(which(keys[[sq$j]] == rankorder) > which(keys[[sq$j-1]] == rankorder)) {
-          # If current rank is higher than previous
-          if(any(base != 'unidentifiable')) {
-            # If any lower taxa were identified, then their ancestor at the given rank can be automatically filled
-            aux_filt <- filter_aux(gsub('_', ' ', base[base != 'unidentifiable']), aux_filt)
-            aux_filt <- aux_filt[aux_filt$col.rank == keys[[sq$j]],]
-            # Rank might not exist in database, returning NA
-            a[[an_or_obs]][row,keys[[sq$j]]] <- if(nrow(aux_filt) == 1) aux_filt[,'col.scientificName'] else NA
-            sq$j <- sq$j + 1
-            return(render_next_question())
-          } else if(any(base == 'unidentifiable')) {
-            # If the lower rank was unidentifiable, but the higher rank just repeats the same options, then it is also unidentifiable
-            nhighertax <- nrow(aux_filt[aux_filt$col.rank == keys[[sq$j]],])
-            nlowertax <- length(sq$values) - 1 # because we know we added the unidentifiable option
-            if(nhighertax == nlowertax) {
-              a[[an_or_obs]][row,keys[[sq$j]]] <- 'unidentifiable'
-              sq$j <- sq$j + 1
-              return(render_next_question())
-            }
-          }
-        } else {
-          # If current rank is lower than previous
-          if(length(base) > 0) {
-            if(base[[1]] == 'unidentifiable') {
-              # If lowest non-NA rank is unidentifiable, then so is this
-              a[[an_or_obs]][row,keys[[sq$j]]] <- 'unidentifiable'
-              sq$j <- sq$j + 1
-              return(render_next_question())
-            } else {
-              # If there are higher identified ranks, then limit possible species to descendants of lowest
-              # Consider having option here for filling in 'not assessed' if there are columns for ranks that I skip based on the prompt file
-              aux_filt <- filter_aux(gsub('_', ' ', base[base != 'unidentifiable'][[1]]), aux_filt)
-            }
-          }
-        }
-      }
-      aux_filt <- aux_filt[aux_filt$col.rank == keys[[sq$j]],]
-      if(nrow(aux_filt) == 0) {
-        a[[an_or_obs]][row,keys[[sq$j]]] <- NA
-        sq$j <- sq$j + 1
-        return(render_next_question())
-      } else if(nrow(aux_filt) == 1) {
-        sq$values <- aux_filt[,'col.scientificName']
-      } else {
-        sq$values <- c(aux_filt[,'col.scientificName'], 'unidentifiable')
-      }
-      sq$question_text <- r$parsed[[q$i]]$question_text[[sq$j]]
-
+      # Prepare drop-down menu by traversing auxiliary hierarchy
+      a$idx_type <- 'sqj'
+      aux_hierarchy()
     }
     
     if(length(sq$values) == 1) {
       # Only one option; autofill it and move on
-      if(r$parsed[[q$i]]$is_observation) {
-        a$observations[sq$i,keys[[sq$j]]] <- sq$values
-        if(length(r$parsed[[q$i]]$aux_name) > 0) {
-          sq$j <- sq$j + 1 
-        } else {
-          sq$i <- sq$i + 1
-        }
-      } else {
-        a$annotations[1,keys[[sq$j]]] <- sq$values
-        if(length(r$parsed[[q$i]]$aux_name) > 0) {
-          sq$j <- sq$j + 1
-        } else {
-          q$i <- q$i + 1
-          initialize_prompt()
-        }
-      }
+      a[[r$parsed[[q$i]]$which_df]][sq$i,r$parsed[[q$i]]$keys[[sq$j]]] <- sq$values
+      increment_idx(a$idx_type)
       return(render_next_question())
     } else {
       # Send signal to update UI for dropdown menu input
@@ -750,22 +736,8 @@ server <- function(input, output, session) {
   observeEvent(input$current_key, {
     req(input$current_key)
     key <- r$parsed[[q$i]]$keys[[sq$j]]
-    if(r$parsed[[q$i]]$is_observation) {
-      a$observations[sq$i,key] <- input$current_key
-      if(length(r$parsed[[q$i]]$aux_name) > 0) {
-        sq$j <- sq$j + 1
-      } else {
-        sq$i <- sq$i + 1
-      }
-    } else {
-      a$annotations[1,key] <- input$current_key
-      if(length(r$parsed[[q$i]]$aux_name) > 0) {
-        sq$j <- sq$j + 1
-      } else {
-        q$i <- q$i + 1
-        initialize_prompt()
-      }
-    }
+    a[[r$parsed[[q$i]]$which_df]][sq$i,key] <- input$current_key
+    increment_idx(a$idx_type)
     updateSelectInput(session, 'current_key', selected = '')
     render_next_question()
   })
@@ -824,9 +796,11 @@ server <- function(input, output, session) {
     a$annotations$photo_annotation_start <- a$metadata$photo_annotation_start
     a$annotations$photo_notes <- ifelse(input$notes == '', 'None', gsub("\r?\n|\r|\t", " ", input$notes))
     r$annotations <- rbind(r$annotations, a$annotations)
-    a$observations$filename <- a$metadata$filename
-    a$observations$photo_annotation_start <- a$metadata$photo_annotation_start
-    r$observations <- rbind(r$observations, a$observations)
+    if(nrow(a$observations) > 0) {
+      a$observations$filename <- a$metadata$filename
+      a$observations$photo_annotation_start <- a$metadata$photo_annotation_start
+      r$observations <- rbind(r$observations, a$observations)
+    }
     if(a$i < nrow(r$photos_not_done)) {
       a$i <- a$i + 1
       initialize_photo()
@@ -853,35 +827,34 @@ server <- function(input, output, session) {
         initialize_photo()
       }
       
-      # Create some pre-processed outputs
-      merged_long <- merge(r$annotations, r$observations, by=names(a$metadata))
-      merged_wide <- r$annotations
-      for(key in r$observation_keys) {
-        for(row in 1:nrow(merged_wide)) {
-          idx <- which(apply(r$observations[,names(a$metadata)], 1, \(x) all(sapply(seq_along(x), \(y) x[[y]] == merged_wide[row,names(a$metadata)[[y]]]))))
-          merged_wide[row,key] <- paste(r$observations[idx,key], collapse=';')
-        }
-      }
-      
       # Write the multiple outputs in a temporary directory
       tmpdir <- file.path(tempdir(), as.integer(Sys.time()))
       dir.create(tmpdir)
-
-      write.table(r$annotations, file.path(tmpdir, 'photo_annotations.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
-      write.table(r$observations, file.path(tmpdir, 'within_photo_observations.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
-      write.table(merged_long, file.path(tmpdir, 'merged_long.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
-      write.table(merged_wide, file.path(tmpdir, 'merged_wide.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      write.tsv <- \(o,f) write.table(o, f, quote = FALSE, sep = '\t', row.names = FALSE)
       
-      if(nrow(r$old_annotations) > 0) {
-        old_and_new <- rbind(r$old_annotations, merged_long)
-        write.table(old_and_new, file.path(tmpdir, 'merged_long_with_old_annotations.tsv'), quote = FALSE, sep = '\t', row.names = FALSE)
+      write.tsv(r$annotations,  file.path(tmpdir, 'photo_annotations.tsv'))
+
+      # Create some pre-merged files if there are within-photo observations
+      if(nrow(r$observations) > 0) {
+        merged_long <- merge(r$annotations, r$observations, by = names(a$metadata), suffixes = c('_whole_photo', ''))
+        merged_wide <- r$annotations
+        for(key in r$observation_keys) {
+          if(key %in% colnames(merged_wide)) colnames(merged_wide)[colnames(merged_wide) == key] <- paste0(key, '_whole_photo')
+          for(row in 1:nrow(merged_wide)) {
+            idx <- which(apply(r$observations[,names(a$metadata)], 1, \(x) all(sapply(seq_along(x), \(y) x[[y]] == merged_wide[row,names(a$metadata)[[y]]]))))
+            merged_wide[row,key] <- paste(r$observations[idx,key], collapse=';')
+          }
+        }
+        write.tsv(r$observations, file.path(tmpdir, 'within_photo_observations.tsv'))
+        write.tsv(merged_long,    file.path(tmpdir, 'merged_long.tsv'))
+        write.tsv(merged_wide,    file.path(tmpdir, 'merged_wide.tsv'))
       }
       
       # Serve a single .zip file with all the files
       zip(
         zipfile = file,
-        files = list.files(tmpdir, full.names = TRUE),
-        flags = '-j'  # just include the files themselves
+        files   = list.files(tmpdir, full.names = TRUE),
+        flags   = '-j'  # just include the files themselves
       )
     }
   )
