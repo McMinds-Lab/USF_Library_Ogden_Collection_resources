@@ -27,6 +27,6 @@ Example prompts file is just a start.
 Prompts will be visited in the order they are written in the file.
 
 The custom photo annotator can be used by a couple methods. It might not be as good as some polished software, but is nicely customizeable - it's worth looking at various other tools and maybe comparing this to them. To play around with it, there are example 'vocabulary' files and photos included. The easiest are:
-1. Use the version that's been exported to https://thecnidaegritty.org/photo_annotator . This won't necessarily be up-to-date with the code maintained here (and currently has a bug for annotations of bounding boxes or point coordinates)
+1. Use the version that's been exported to https://thecnidaegritty.org/photo_annotator . This won't necessarily be up-to-date with the code maintained here (and currently has a bug for annotations of bounding boxes or point coordinates, so the example prompts file doesn't work and it will only work for whole-photo annotations when you use your own file)
 2. Copy and paste the command `shiny::runGitHub(repo = 'McMinds-Lab/USF_Library_Ogden_Collection_resources', ref = 'main', subdir = 'shiny_annotation')` in an R interpreter with the Shiny package installed should work.
 3. Download this repo (download the .zip file with the big green `code` button or use `git clone git@github.com:McMinds-Lab/USF_Library_Ogden_Collection_resources.git` in a terminal) and then use the command `shiny::runApp('path/to/USF_Library_Ogden_Collection_resources/shiny_annotation')`
