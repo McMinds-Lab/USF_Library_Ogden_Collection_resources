@@ -1,5 +1,9 @@
 /* styles.css */
 
+.col-sm-4 {
+  max-height: 95vh
+}
+
 #current_photo img {
   max-width: 100%; 
   max-height: 100vh

@@ -76,6 +76,12 @@ server <- function(input, output, session) {
   options(shiny.maxRequestSize = 1000*1024^2)
   
   # hardcode a couple of variables that will be reused a few times
+  # temporary output directory
+  tmpdir <- file.path(tempdir(), as.integer(Sys.time()))
+  dir.create(tmpdir)
+  # custom formatting for tsv output
+  write.tsv <- \(o,f) write.table(o, f, quote = FALSE, sep = '\t', row.names = FALSE)
+  # slightly shorter to use variable
   coordinate_types <- c('point_coordinates', 'box_coordinates')
   # currently only allowable ranks that can be specified in prompt file, in order (others can exist in aux file)
   rankorder <- c("subspecies", "species", "subgenus", "genus",
@@ -96,6 +102,7 @@ server <- function(input, output, session) {
                       aux_files         = list(),
                       aux_data          = list(),
                       aux_i             = 1,
+                      not_in_database   = character(0),
                       photo_df          = NULL,
                       photos_not_done   = NULL,
                       old_annotations   = data.frame(),
@@ -105,6 +112,7 @@ server <- function(input, output, session) {
                       annotations       = NULL,         # only add to this at the end of each photo (row for each photo)
                       observations      = NULL,         # only add to this at the end of each photo (row for each coordinate selection across all photos)
                       messages          = NULL,
+                      last_save         = 0,
                       metadata          = list(annotator_id       = NA,
                                                session_start_time = NA))
   
@@ -151,6 +159,10 @@ server <- function(input, output, session) {
       previous_annotations = list(
         fileInput("resume_file", "Select a previous annotations file (or don't)"),
         actionButton("begin", "Begin")
+      ),
+      oops = list(
+        HTML(paste0('<p>The following taxa, specified in the "values" column of "', r$prompts_file$name, '", are not present in "', r$aux_files[[1]]$name, '". Please remove or replace them and restart the app.</p>',
+                    '<p>', paste(r$not_in_database, collapse = '</p><p>'),'</p>'))
       ),
       annotate = NULL
     )
@@ -341,21 +353,30 @@ server <- function(input, output, session) {
   # If the aux_file UI is displayed and the user then chooses an aux_file, store it in the list
   # If there are more aux files to specify, increment the counter to refresh the fileInput prompt
   # Otherwise, trigger the photo input step
+  aux_prep <- function() {
+    # Load the data
+    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='', quote='')
+    # Filter the file to only contain relevant taxa from the prompt file
+    targets <- unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$aux_name)>0)], \(y) y$values))))
+    r$not_in_database <- targets[!targets %in% r$aux_data[[1]]$col.scientificName]
+    if(length(r$not_in_database) > 0) {
+      r$workflow_step <- 'oops'
+    } else {
+      r$aux_data[[1]] <- filter_aux(targets, r$aux_data[[1]])
+      # Either prompt for another aux file or move on
+      if(r$aux_i < length(r$aux_files)) {
+        r$aux_i <- r$aux_i + 1
+      } else {
+        r$workflow_step <- 'photo_files'
+      }
+    }
+  }
+    
   observeEvent(input$aux_file, {
     req(input$aux_file)
     # Record user input
     r$aux_files[[r$aux_i]] <- input$aux_file
-    # Load the data
-    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='', fill = TRUE)
-    # Filter the file to only contain relevant taxa
-    targets <- unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$aux_name)>0)], \(y) y$values))))
-    r$aux_data[[1]] <- filter_aux(targets, r$aux_data[[1]])
-    # Either prompt for another aux file or move on
-    if(r$aux_i < length(r$aux_files)) {
-      r$aux_i <- r$aux_i + 1
-    } else {
-      r$workflow_step <- 'photo_files'
-    }
+    aux_prep()
   })
   
   # If the user chooses the default Catalog of Life taxonomy rather than specifying their own aux file
@@ -363,17 +384,7 @@ server <- function(input, output, session) {
     # Assign default info
     r$aux_files[[r$aux_i]] <- list(name     = 'Catalogue of Life, version 2024-08-29 (species)',
                                    datapath = 'www/1eefaf9f-adb0-4d7b-a980-4884078e3508/NameUsage.tsv.gz')
-    # Load the data
-    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='', quote='')
-    # Filter the file to only contain relevant taxa from the prompt file
-    targets <- unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$aux_name)>0)], \(y) y$values))))
-    r$aux_data[[1]] <- filter_aux(targets, r$aux_data[[1]])
-    # Either prompt for another aux file or move on
-    if(r$aux_i < length(r$aux_files)) {
-      r$aux_i <- r$aux_i + 1
-    } else {
-      r$workflow_step <- 'photo_files'
-    }
+    aux_prep()
   }, ignoreInit = TRUE)
   
   # Respond to user photo choices
@@ -507,13 +518,18 @@ server <- function(input, output, session) {
         actionButton("submit_extra_notes",  "Submit observation notes")
       ),
       photo_finished = list(
-        renderText({"Structured questions finished - finish notes and click Next, Save, or Reset\n"}),
+        HTML("<p>Structured questions finished - finish notes and click Next, Save, or Reset<p>"),
+        {
+          timespan <- as.numeric(round(difftime(Sys.time(), r$last_save_time, units='mins'),0))
+          n_unsaved <- a$i - r$last_save
+          HTML(paste0('<p>You have not saved for <span style="color:', if(timespan > 30) 'red' else if(timespan > 15) 'orange' else 'green', '">', timespan, '</span> minutes and <span style="color:', if(n_unsaved > 50) 'red' else if(n_unsaved > 25) 'orange' else 'green', '">', n_unsaved,' photos<p>'))
+        },
         actionButton("next_photo",  "Next photo"),
         downloadButton("save_file", "Save data"),
         actionButton("reset_photo", "Reset photo")
       ),
       all_finished = list(
-        renderText({"All photos finished - Finish notes and click Save or Reset\n"}),
+        HTML("<p>All photos finished - Finish notes and click Save or Reset<p>"),
         downloadButton("save_file", "Save data"),
         actionButton("reset_photo", "Reset photo")
       )
@@ -710,25 +726,30 @@ server <- function(input, output, session) {
     render_next_question()
   }
   
+  begin <- function() {
+    file.copy(r$prompts_file$datapath, tmpdir)
+    oldname_cleaned <- sub('_prefiltered', '', sub('\\..[^\\.]*$', '', r$aux_files[[1]]$name))
+    write.tsv(r$aux_data[[1]], file.path(tmpdir, paste0(oldname_cleaned, '_pre-filtered.tsv')))
+    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
+    r$last_save_time <- Sys.time()
+    a$i <- 1
+    r$workflow_step <- 'annotate'
+    initialize_photo()
+  }
+  
   # Now, back to watching for user input to finalize setup
   # Retrieve info when the previous annotation file button is used
   observeEvent(input$resume_file, {
     req(input$resume_file)
     r$old_annotations <- read.table(input$resume_file$datapath, header = TRUE, sep = '\t')
     r$photos_not_done <- r$photo_df[!r$photo_df$name %in% r$old_annotations$filename,]
-    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
-    a$i <- 1
-    r$workflow_step <- 'annotate'
-    initialize_photo()
+    begin()
   })
     
   # Skip uploading previous annotations by clicking Begin
   observeEvent(input$begin, {
     r$photos_not_done <- r$photo_df
-    r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
-    r$workflow_step <- 'annotate'
-    a$i <- 1
-    initialize_photo()
+    begin()
   }, ignoreInit = TRUE)
   
   ## And then watch for responses to the various annotation prompts
@@ -826,12 +847,10 @@ server <- function(input, output, session) {
       } else {
         initialize_photo()
       }
+      r$last_save <- a$i - 1
+      r$last_save_time <- Sys.time()
       
       # Write the multiple outputs in a temporary directory
-      tmpdir <- file.path(tempdir(), as.integer(Sys.time()))
-      dir.create(tmpdir)
-      write.tsv <- \(o,f) write.table(o, f, quote = FALSE, sep = '\t', row.names = FALSE)
-      
       write.tsv(r$annotations,  file.path(tmpdir, 'photo_annotations.tsv'))
 
       # Create some pre-merged files if there are within-photo observations
