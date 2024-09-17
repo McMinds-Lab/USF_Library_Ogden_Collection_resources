@@ -83,7 +83,7 @@ server <- function(input, output, session) {
   write.tsv <- \(o,f) write.table(o, f, quote = FALSE, sep = '\t', row.names = FALSE)
   # slightly shorter to use variable
   coordinate_types <- c('point_coordinates', 'box_coordinates')
-  # currently only allowable ranks that can be specified in prompt file, in order (others can exist in aux file)
+  # currently only allowable ranks that can be specified in prompt file, in order (others can exist in tax file)
   rankorder <- c("subspecies", "species", "subgenus", "genus",
                  "subtribe", "tribe", "subfamily", "family", "superfamily",
                  "infraorder", "suborder", "order", "superorder",
@@ -99,9 +99,12 @@ server <- function(input, output, session) {
                       prompts_file      = NULL,
                       prompts           = NULL,
                       parsed            = NULL,
-                      aux_files         = list(),
-                      aux_data          = list(),
-                      aux_i             = 1,
+                      values_files      = list(),
+                      values_data       = list(),
+                      values_i          = 1,
+                      tax_files         = list(),
+                      tax_data          = list(),
+                      tax_i             = 1,
                       not_in_database   = character(0),
                       photo_df          = NULL,
                       photos_not_done   = NULL,
@@ -131,7 +134,7 @@ server <- function(input, output, session) {
   sq <- reactiveValues(n = 0,    # how many lines of a$observations exist before the current question
                        i = NULL, # which line of a$observations are we on
                        j = NULL, # which stage of a question are we on (e.g. when using an external taxonomy)
-                       aux_filt = NULL,
+                       tax_filt = NULL,
                        indistinguishables = NULL,
                        question_text = NULL,
                        values = NULL) # what are the values that are currently available for a drop-down
@@ -148,9 +151,13 @@ server <- function(input, output, session) {
         fileInput("prompts", "Select a file with prompts"),
         actionButton("default_prompts", "Use example")
       ),
-      aux_files = list(
-        fileInput("aux_file", paste0("Select the auxiliary `", names(r$aux_files)[[r$aux_i]], "` file that is named in the prompts file")),
-        actionButton("default_aux_file", "Use default Catalog of Life taxonomy")
+      values_files = list(
+        fileInput("values_file", paste0("Select the values file that is named `", names(r$values_files)[[r$values_i]], "` in the prompts file")),
+        if(r$values_i == 1) actionButton("default_values_file", "Use example Caribbean coral traits") else if(r$values_i == 2) actionButton("default_values_file", "Use example Caribbean fish list") else ''
+      ),
+      tax_files = list(
+        fileInput("tax_file", paste0("Select the taxonomy file that is named `", names(r$tax_files)[[r$tax_i]], "` in the prompts file")),
+        actionButton("default_tax_file", "Use default GBIF backbone taxonomy")
       ),
       photo_files = list(
         fileInput("photos", "Select a set of files to annotate", multiple = TRUE, accept = 'image/*'),
@@ -160,8 +167,12 @@ server <- function(input, output, session) {
         fileInput("resume_file", "Select a previous annotations file (or don't)"),
         actionButton("begin", "Begin")
       ),
-      oops = list(
-        HTML(paste0('<p>The following taxa, specified in the "values" column of "', r$prompts_file$name, '", are not present in "', r$aux_files[[1]]$name, '". Please remove or replace them and restart the app.</p>',
+      oops_tax = list(
+        HTML(paste0('<p>The following taxa, specified in the "values" column of "', r$prompts_file$name, '", are not present in "', r$tax_files[[1]]$name, '". Please remove or replace them and restart the app.</p>',
+                    '<p>', paste(r$not_in_database, collapse = '</p><p>'),'</p>'))
+      ),
+      oops_vf = list(
+        HTML(paste0('<p>The following column names, specified in the "values" column of "', r$prompts_file$name, '", are not present in "', r$vf_files[[1]]$name, '". Please remove or replace them and restart the app.</p>',
                     '<p>', paste(r$not_in_database, collapse = '</p><p>'),'</p>'))
       ),
       annotate = NULL
@@ -194,8 +205,8 @@ server <- function(input, output, session) {
   })
   
   # This event is triggered by the assignment of a derived reactive value in `r` rather than by direct user input
-  # It will process the prompts file and define the data structure and see whether auxiliary files need to be selected
-  # If no auxiliary files (like taxonomic data) are needed, then that step is skipped
+  # It will process the prompts file and define the data structure and see whether taxonomy files need to be selected
+  # If no taxonomic files are needed, then that step is skipped
   observeEvent(r$prompts_file, {
     req(r$prompts_file)
     
@@ -205,16 +216,15 @@ server <- function(input, output, session) {
     r$parsed <- apply(r$prompts, 1, \(x) {
       
       keys_sep <- strsplit(x[['key']], ':')[[1]]
-
       if(length(keys_sep) > 1) {
-        # If the keys field has a ':', then it names an auxiliary file and the values to filter from it
-        aux_name <- keys_sep[[1]]
+        # If the keys field has a ':', then it names an taxonomy file and the values to filter from it
+        tax_name <- keys_sep[[1]]
         keys <- strsplit(keys_sep[[2]], ',')[[1]]
-        # Since aux files lead through multiple prompts, the question text can be configured to specify the current key by placing {key} in the string
+        # Since tax files lead through multiple prompts, the question text can be configured to specify the current key by placing {key} in the string
         question_text <- setNames(sapply(keys, \(y) gsub('{key}', y, x[['question_text']], perl=TRUE)), keys)
       } else {
-        # No aux files
-        aux_name <- character(0)
+        # No tax files
+        tax_name <- character(0)
         if(x[['key']] %in% coordinate_types) {
           # coordinate picking is another special case that produces values in multiple predefined columns
           keys <- c('observation_type', 'point_or_box', 'coordinates')
@@ -225,8 +235,15 @@ server <- function(input, output, session) {
         question_text <- setNames(x[['question_text']], x[['key']])
       }
       
-      values <- unlist(strsplit(x[['values']], ",")[[1]])
-      
+      values_sep <- strsplit(x[['values']], ':')[[1]]
+      if(length(values_sep) > 1) {
+        vf_name <- values_sep[[1]]
+        values <- strsplit(values_sep[[2]], ',')[[1]] # actually names of columns in file that contains values
+      } else {
+        vf_name <- character(0)
+        values <- unlist(strsplit(x[['values']], ",")[[1]]) # actual values
+      }
+
       if(is.na(x[['dependencies']]) & !x[['key']] %in% coordinate_types) {
         # an NA specifies that the prompt happens no matter what
         dependencies <- list()
@@ -236,7 +253,7 @@ server <- function(input, output, session) {
         dependencies <- setNames(lapply(dependencies, \(y) y[[2]]), sapply(dependencies, \(y) y[[1]]))
       }
       
-      return(list(aux_name=aux_name, keys=keys, dependencies=dependencies, values=values, question_text=question_text))
+      return(list(tax_name=tax_name, keys=keys, dependencies=dependencies, vf_name=vf_name, values=values, question_text=question_text))
       
     })
     
@@ -269,9 +286,13 @@ server <- function(input, output, session) {
     }
     
     # Look through keys for the special format `file:keys`, and create an empty named list to be later filled in via fileInput
-    aux_names <- unique(sapply(r$parsed, \(x) x$aux_name))
-    aux_names <- aux_names[sapply(aux_names, length) > 0]
-    r$aux_files <- r$aux_data <- setNames(vector("list", length(aux_names)), aux_names)
+    tax_names <- unique(sapply(r$parsed, \(x) x$tax_name))
+    tax_names <- tax_names[sapply(tax_names, length) > 0]
+    r$tax_files <- r$tax_data <- setNames(vector("list", length(tax_names)), tax_names)
+    
+    vf_names <- unique(sapply(r$parsed, \(x) x$vf_name))
+    vf_names <- vf_names[sapply(vf_names, length) > 0]
+    r$values_files <- r$values_data <- setNames(vector("list", length(vf_names)), vf_names)
     
     # Primary data storage for annotations associated with whole photo
     # Includes timestamps, annotator ID, and other metadata in addition to custom annotations and an extra column for notes
@@ -292,38 +313,80 @@ server <- function(input, output, session) {
     a$annotations <- r$annotations
     a$observations <- r$observations
     
-    if(length(r$aux_files) > 0) {
-      r$workflow_step <- 'aux_files'
+    if(length(r$values_files) > 0) {
+      r$workflow_step <- 'values_files'
+    } else if(length(r$tax_files) > 0) {
+      r$workflow_step <- 'tax_files'
     } else {
       r$workflow_step <- 'photo_files'
     }
   })
   
-  # Filter the auxiliary taxa file so it's quicker to search through
-  # Currently assumes only one aux file and only the default coldp tested
-  filter_aux <- function(targets, aux) {
-    # Entries in the aux file that are directly listed in the prompt file
-    res <- aux[aux$col.scientificName %in% targets,]
+  vf_prep <- function() {
+    # Load the data
+    r$values_data[[r$values_i]] <- read.table(r$values_files[[r$values_i]]$datapath, header = TRUE, sep = '\t', comment.char='', quote='')
+    cols <- unique(unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$vf_name)>0)], \(y) y$values)))
+    r$not_in_database <- cols[!cols %in% colnames(r$values_data[[r$values_i]])]
+    if(length(r$not_in_database) > 0) {
+      r$workflow_step <- 'oops_vf'
+    } else {
+      # Either prompt for another values file or move on
+      if(r$values_i < length(r$values_files)) {
+        r$values_i <- r$values_i + 1
+      } else if(length(r$tax_files) > 0) {
+        r$workflow_step <- 'tax_files'
+      } else {
+        r$workflow_step <- 'photo_files'
+      }
+    }
+  }
+  
+  # If the user uploads their own values file
+  observeEvent(input$values_file, {
+    req(input$values_file)
+    # Record user input
+    r$values_files[[r$values_i]] <- input$values_file
+    vf_prep()
+  })
+  
+  # If the user chooses the default values file rather than specifying their own
+  observeEvent(input$default_values_file, {
+    # Assign default info
+    r$values_files[[r$values_i]] <- list(
+                                      list(name     = 'Example Caribbean corals traits',
+                                           datapath = 'www/example_corals.tsv'),
+                                      list(name     = 'Example Caribbean fish list',
+                                           datapath = 'www/example_fish.tsv')
+                                        )[[r$values_i]]
+    vf_prep()
+  }, ignoreInit = TRUE)
+  
+  
+  # Filter the taxonomy taxa file so it's quicker to search through
+  # Currently assumes only one tax file and only the default, pre-filtered GBIF backbone has been tested
+  filter_tax <- function(targets, tax) {
+    # Entries in the tax file that are directly listed in the prompt file
+    res <- tax[tax$canonicalName %in% targets,]
     
     # Parent taxa of the directly mentioned ones that are not already in the list
-    missinghigher <- aux$col.ID[aux$col.ID %in% res$col.parentID]
-    missinghigher <- missinghigher[!missinghigher %in% res$col.ID]
+    missinghigher <- tax$taxonID[tax$taxonID %in% res$parentNameUsageID]
+    missinghigher <- missinghigher[!missinghigher %in% res$taxonID]
     
     # Child taxa of the directly mentioned ones that are not already in the list
-    missinglower <- aux$col.ID[aux$col.parentID %in% res$col.ID]
-    missinglower <- missinglower[!missinglower %in% res$col.ID]
+    missinglower <- tax$taxonID[tax$parentNameUsageID %in% res$taxonID]
+    missinglower <- missinglower[!missinglower %in% res$taxonID]
     
     # Iterate toward the root to find all ancestors
     if(length(missinghigher) > 0) {
-      higherres <- aux[aux$col.ID %in% missinghigher,]
+      higherres <- tax[tax$taxonID %in% missinghigher,]
       while(TRUE) {
         res <- rbind(res, higherres)
         
-        missinghigher <- aux$col.ID[aux$col.ID %in% higherres$col.parentID]
-        missinghigher <- missinghigher[!missinghigher %in% res$col.ID]
+        missinghigher <- tax$taxonID[tax$taxonID %in% higherres$parentNameUsageID]
+        missinghigher <- missinghigher[!missinghigher %in% res$taxonID]
         
         if(length(missinghigher) > 0) {
-          higherres <- aux[aux$col.ID %in% missinghigher,]
+          higherres <- tax[tax$taxonID %in% missinghigher,]
         } else {
           break
         }
@@ -332,15 +395,15 @@ server <- function(input, output, session) {
     
     # Iterate toward the tips to find all descendants
     if(length(missinglower) > 0) {
-      lowerres <- aux[aux$col.ID %in% missinglower,]
+      lowerres <- tax[tax$taxonID %in% missinglower,]
       while(TRUE) {
         res <- rbind(res, lowerres) 
         
-        missinglower <- aux$col.ID[aux$col.parentID %in% lowerres$col.ID]
-        missinglower <- missinglower[!missinglower %in% res$col.ID]
+        missinglower <- tax$taxonID[tax$parentNameUsageID %in% lowerres$taxonID]
+        missinglower <- missinglower[!missinglower %in% res$taxonID]
         
         if(length(missinglower) > 0) {
-          lowerres <- aux[aux$col.ID %in% missinglower,]
+          lowerres <- tax[tax$taxonID %in% missinglower,]
         } else {
           break
         }
@@ -350,47 +413,50 @@ server <- function(input, output, session) {
     return(res)
   }
   
-  # If the aux_file UI is displayed and the user then chooses an aux_file, store it in the list
-  # If there are more aux files to specify, increment the counter to refresh the fileInput prompt
+  # If the tax_file UI is displayed and the user then chooses an tax_file, store it in the list
+  # If there are more tax files to specify, increment the counter to refresh the fileInput prompt
   # Otherwise, trigger the photo input step
-  aux_prep <- function() {
+  tax_prep <- function() {
     # Load the data
-    r$aux_data[[r$aux_i]] <- read.table(r$aux_files[[r$aux_i]]$datapath, header = TRUE, sep = '\t', comment.char='', quote='')
+    r$tax_data[[r$tax_i]] <- read.table(r$tax_files[[r$tax_i]]$datapath, header = TRUE, sep = '\t', comment.char='', quote='')
     # Filter the file to only contain relevant taxa from the prompt file
-    targets <- unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$aux_name)>0)], \(y) y$values))))
-    r$not_in_database <- targets[!targets %in% r$aux_data[[1]]$col.scientificName]
+    targets <- c(
+                 unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$tax_name)>0 & length(x$vf_name) == 0)], \(y) y$values)))),
+                 unique(gsub('_', ' ', unlist(sapply(r$parsed[sapply(r$parsed, \(x) length(x$tax_name)>0 & length(x$vf_name) > 0)], \(y) r$values_data[[y$vf_name]][,y$values]))))
+                )
+    r$not_in_database <- targets[!targets %in% r$tax_data[[1]]$canonicalName]
     if(length(r$not_in_database) > 0) {
-      r$workflow_step <- 'oops'
+      r$workflow_step <- 'oops_tax'
     } else {
-      r$aux_data[[1]] <- filter_aux(targets, r$aux_data[[1]])
-      # Either prompt for another aux file or move on
-      if(r$aux_i < length(r$aux_files)) {
-        r$aux_i <- r$aux_i + 1
+      r$tax_data[[1]] <- filter_tax(targets, r$tax_data[[1]])
+      # Either prompt for another tax file or move on
+      if(r$tax_i < length(r$tax_files)) {
+        r$tax_i <- r$tax_i + 1
       } else {
         r$workflow_step <- 'photo_files'
       }
     }
   }
     
-  observeEvent(input$aux_file, {
-    req(input$aux_file)
+  observeEvent(input$tax_file, {
+    req(input$tax_file)
     # Record user input
-    r$aux_files[[r$aux_i]] <- input$aux_file
-    aux_prep()
+    r$tax_files[[r$tax_i]] <- input$tax_file
+    tax_prep()
   })
   
-  # If the user chooses the default Catalog of Life taxonomy rather than specifying their own aux file
-  observeEvent(input$default_aux_file, {
+  # If the user chooses the default GBIF taxonomy rather than specifying their own tax file
+  observeEvent(input$default_tax_file, {
     # Assign default info
-    r$aux_files[[r$aux_i]] <- list(name     = 'Catalogue of Life, version 2024-08-29 (species)',
-                                   datapath = 'www/1eefaf9f-adb0-4d7b-a980-4884078e3508/NameUsage.tsv.gz')
-    aux_prep()
+    r$tax_files[[r$tax_i]] <- list(name     = 'GBIF backbone 2023-08-28, valid and not-extinct taxa',
+                                   datapath = 'www/gbif_backbone_accepted_living.tsv.gz')
+    tax_prep()
   }, ignoreInit = TRUE)
   
   # Respond to user photo choices
   observeEvent(input$default_photos, {
     r$photo_df <- data.frame(datapath = c('www/photo_1_fish.jpg', 'www/photo_2_coral.jpg'),
-                             name = c('photo_1_fish.jpg', 'photo_2_coral.jpg'))[sample(2),]
+                             name     = c('photo_1_fish.jpg',     'photo_2_coral.jpg'))[sample(2),]
     r$workflow_step <- 'previous_annotations'
   }, ignoreInit = TRUE)
   
@@ -484,7 +550,8 @@ server <- function(input, output, session) {
     req(a$i)
     paste0(
       'Prompts file (', nrow(r$prompts), ' prompts): ', r$prompts_file$name, '\n',
-      'Auxiliary file (', names(r$aux_files)[[1]], '): ', r$aux_files[[1]]$name, '\n',
+      if(length(r$values_files) > 0) paste0('Values files', paste(sapply(seq_along(r$values_files), \(i) paste0('(', names(r$values_files)[[i]], '): ', r$values_files[[i]]$name)), collapse = '\n'), '\n'),
+      if(length(r$tax_files) > 0) paste0('Taxonomy file (', names(r$tax_files)[[1]], '): ', r$tax_files[[1]]$name, '\n'),
       nrow(r$photo_df), ' photos\n',
       ifelse(is.null(input$resume_file$datapath), 
              'No old annotations - starting from scratch!\n', 
@@ -559,7 +626,7 @@ server <- function(input, output, session) {
   
   # Whenever a new question is rendered, these values need to be reset
   initialize_prompt <- function() {
-    r$aux_i <- 1
+    r$tax_i <- 1
     sq$n <- nrow(a$observations)
     sq$i <- 1
     sq$j <- 1
@@ -578,19 +645,19 @@ server <- function(input, output, session) {
     }
   }
   
-  # When a prompt uses an auxiliary file, parse the hierarchy to determine the next question or autofill unique options
-  # Intended to ultimately be rather flexible, but for now assumes a single auxiliary file in 'coldp' biological taxonomy format from Catalog of Life
-  aux_hierarchy <- function() {
-    # Auxiliary file traversal
+  # When a prompt uses an taxonomy file, parse the hierarchy to determine the next question or autofill unique options
+  # Intended to ultimately be rather flexible, but for now assumes a single taxonomy file in 'coldp' biological taxonomy format from Catalog of Life
+  tax_hierarchy <- function() {
+    # Taxonomy file traversal
     keys <- r$parsed[[q$i]]$keys
     # Filter the database to taxa relevant to current prompt
     if(sq$j == 1) {
-      sq$aux_filt <- filter_aux(gsub('_', ' ', r$parsed[[q$i]]$values), r$aux_data[[1]])
+      sq$tax_filt <- filter_tax(gsub('_', ' ', sq$values), r$tax_data[[1]])
       sq$indistinguishables <- character()
     } else {
       # If not at the starting rank, then replace the filtered options based on below logic
       # Update taxa that can't be distinguished here. I know it's ugly.
-      if(!is.na(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]])) if(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]] == 'unidentifiable') sq$indistinguishables <- sort(unique(c(sq$indistinguishables, sq$aux_filt[,'col.ID'])))
+      if(!is.na(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]])) if(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]] == 'unidentifiable') sq$indistinguishables <- sort(unique(c(sq$indistinguishables, sq$tax_filt$taxonID)))
       # Filter and order ranks in data
       ordered_keys <- rankorder[rankorder %in% keys]
       current_taxonomy <- a[[r$parsed[[q$i]]$which_df]][sq$i,ordered_keys]
@@ -602,10 +669,10 @@ server <- function(input, output, session) {
         if(length(identified) > 0) {
           # If any previous ranks were identifiable, use the most precise one to further filter options
           lowest_identified <- min(identified)
-          sq$aux_filt <- filter_aux(gsub('_', ' ', current_taxonomy[ordered_keys[lowest_identified]]), sq$aux_filt)
+          sq$tax_filt <- filter_tax(gsub('_', ' ', current_taxonomy[ordered_keys[lowest_identified]]), sq$tax_filt)
         }
         unidentified <- previous_ranknums[current_taxonomy == 'unidentifiable']
-        if(any(unidentified > current_ranknum) || (length(unidentified) > 0 && sum(sq$aux_filt$col.rank == keys[[sq$j]]) > 1 && identical(sort(sq$aux_filt$col.ID), sq$indistinguishables))) {
+        if(any(unidentified > current_ranknum) || (length(unidentified) > 0 && sum(sq$tax_filt$taxonRank == keys[[sq$j]]) > 1 && identical(sort(sq$tax_filt$taxonID), sq$indistinguishables))) {
           # If any previous unidentifiable ranks were higher than the current one, then it is too 
           # Or, if all the current options were already indistinguishable in other iterations, then the current rank is also unidentifiable
           sq$values <- 'unidentifiable'
@@ -613,7 +680,7 @@ server <- function(input, output, session) {
         }
       }
     }
-    values <- sq$aux_filt$col.scientificName[sq$aux_filt$col.rank == keys[[sq$j]]]
+    values <- sq$tax_filt$canonicalName[sq$tax_filt$taxonRank == keys[[sq$j]]]
     if(length(values) == 0) {
       sq$values <- NA
     } else if(length(values) == 1) {
@@ -660,8 +727,8 @@ server <- function(input, output, session) {
     if(length(r$parsed[[q$i]]$dependencies) == 0) {
       # If no dependencies, then always proceed
       fulfilled <- TRUE
-    } else if(length(r$parsed[[q$i]]$aux_name) > 0 & sq$j > length(r$parsed[[q$i]]$keys)) {
-      # If reaching end of auxiliary file traversal
+    } else if(length(r$parsed[[q$i]]$tax_name) > 0 & sq$j > length(r$parsed[[q$i]]$keys)) {
+      # If reaching end of taxonomy file traversal
       fulfilled <- FALSE
     } else {
       # Only proceed if ALL dependencies are fulfilled
@@ -691,17 +758,31 @@ server <- function(input, output, session) {
       r$annotation_type <- 'unstructured_text'
       return()
     }
-      
-    if(length(r$parsed[[q$i]]$aux_name) == 0) {
-      # No auxiliary file; prepare drop-down menu directly from prompts file
-      sq$question_text <- r$parsed[[q$i]]$question_text
+    
+    if(length(r$parsed[[q$i]]$vf_name) == 0) {
+      # No values file; starting values directly specified in prompts file
       sq$values <- r$parsed[[q$i]]$values
     } else {
-      # Prepare drop-down menu by traversing auxiliary hierarchy
-      a$idx_type <- 'sqj'
-      aux_hierarchy()
+      # Grab values from file and pre-filter based on previous annotations
+      df <- r$values_data[[r$parsed[[q$i]]$vf_name]]
+      old_answers <- a[[r$parsed[[q$i]]$which_df]][sq$i,,drop=FALSE]
+      old_answers <- old_answers[,!is.na(old_answers[1,]) & colnames(old_answers) %in% colnames(df), drop=FALSE]
+      if(ncol(old_answers) > 0) {
+        shared <- intersect(colnames(old_answers), colnames(df))
+        df <- df[apply(df[,shared,drop=FALSE],1,\(x) all(x == old_answers[,shared,drop=FALSE], na.rm=TRUE)),,drop=FALSE]
+      }
+      sq$values <- df[,r$parsed[[q$i]]$values]
     }
-    
+
+    if(length(r$parsed[[q$i]]$tax_name) == 0) {
+      # No taxonomy file; prepare drop-down menu directly from prompts file
+      sq$question_text <- r$parsed[[q$i]]$question_text
+    } else {
+      # Prepare drop-down menu by traversing taxonomic hierarchy
+      a$idx_type <- 'sqj'
+      tax_hierarchy()
+    }
+
     if(length(sq$values) == 1) {
       # Only one option; autofill it and move on
       a[[r$parsed[[q$i]]$which_df]][sq$i,r$parsed[[q$i]]$keys[[sq$j]]] <- sq$values
@@ -728,8 +809,8 @@ server <- function(input, output, session) {
   
   begin <- function() {
     file.copy(r$prompts_file$datapath, tmpdir)
-    oldname_cleaned <- sub('_prefiltered', '', sub('\\..[^\\.]*$', '', r$aux_files[[1]]$name))
-    write.tsv(r$aux_data[[1]], file.path(tmpdir, paste0(oldname_cleaned, '_pre-filtered.tsv')))
+    oldname_cleaned <- sub('_prefiltered', '', sub('\\..[^\\.]*$', '', r$tax_files[[1]]$name))
+    write.tsv(r$tax_data[[1]], file.path(tmpdir, paste0(oldname_cleaned, '_pre-filtered.tsv')))
     r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
     r$last_save_time <- Sys.time()
     a$i <- 1
