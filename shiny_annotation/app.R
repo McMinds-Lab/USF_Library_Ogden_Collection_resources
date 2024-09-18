@@ -127,15 +127,14 @@ server <- function(input, output, session) {
                       metadata     = list(filename               = NA,
                                           photo_annotation_start = NA))
   
-  # Define variables that are reset for each line of questioning in the questions file
-  q <- reactiveValues(i = NULL) # which line of the questions file are we on
+  # Define variables that are reset for each line of questioning in the prompts file
+  q <- reactiveValues(i = NULL) # which line of the prompts file are we on
   
   # Define variables that are reset for specific sub-questions 
   sq <- reactiveValues(n = 0,    # how many lines of a$observations exist before the current question
                        i = NULL, # which line of a$observations are we on
                        j = NULL, # which stage of a question are we on (e.g. when using an external taxonomy)
-                       tax_filt = NULL,
-                       indistinguishables = NULL,
+                       tax_filt = NULL, # taxonomy filtered to current sub-question
                        question_text = NULL,
                        values = NULL) # what are the values that are currently available for a drop-down
   
@@ -428,7 +427,7 @@ server <- function(input, output, session) {
     if(length(r$not_in_database) > 0) {
       r$workflow_step <- 'oops_tax'
     } else {
-      r$tax_data[[1]] <- filter_tax(targets, r$tax_data[[1]])
+      r$tax_data[[r$tax_i]] <- filter_tax(targets, r$tax_data[[r$tax_i]])
       # Either prompt for another tax file or move on
       if(r$tax_i < length(r$tax_files)) {
         r$tax_i <- r$tax_i + 1
@@ -646,41 +645,35 @@ server <- function(input, output, session) {
   }
   
   # When a prompt uses an taxonomy file, parse the hierarchy to determine the next question or autofill unique options
-  # Intended to ultimately be rather flexible, but for now assumes a single taxonomy file in 'coldp' biological taxonomy format from Catalog of Life
+  # Intended to ultimately be rather flexible, but for now assumes a single taxonomy file in 'Darwin Core Archive' biological taxonomy format from GBIF
   tax_hierarchy <- function() {
     # Taxonomy file traversal
-    keys <- r$parsed[[q$i]]$keys
     # Filter the database to taxa relevant to current prompt
-    if(sq$j == 1) {
-      sq$tax_filt <- filter_tax(gsub('_', ' ', sq$values), r$tax_data[[1]])
-      sq$indistinguishables <- character()
-    } else {
-      # If not at the starting rank, then replace the filtered options based on below logic
-      # Update taxa that can't be distinguished here. I know it's ugly.
-      if(!is.na(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]])) if(a[[r$parsed[[q$i]]$which_df]][sq$i,keys[[sq$j-1]]] == 'unidentifiable') sq$indistinguishables <- sort(unique(c(sq$indistinguishables, sq$tax_filt$taxonID)))
-      # Filter and order ranks in data
-      ordered_keys <- rankorder[rankorder %in% keys]
-      current_taxonomy <- a[[r$parsed[[q$i]]$which_df]][sq$i,ordered_keys]
-      previous_ranknums <- which(!is.na(current_taxonomy))
-      current_taxonomy <- current_taxonomy[previous_ranknums]
-      if(length(current_taxonomy) > 0) {
-        current_ranknum <- match(keys[[sq$j]], ordered_keys)
-        identified <- previous_ranknums[current_taxonomy != 'unidentifiable']
-        if(length(identified) > 0) {
-          # If any previous ranks were identifiable, use the most precise one to further filter options
-          lowest_identified <- min(identified)
-          sq$tax_filt <- filter_tax(gsub('_', ' ', current_taxonomy[ordered_keys[lowest_identified]]), sq$tax_filt)
-        }
-        unidentified <- previous_ranknums[current_taxonomy == 'unidentifiable']
-        if(any(unidentified > current_ranknum) || (length(unidentified) > 0 && sum(sq$tax_filt$taxonRank == keys[[sq$j]]) > 1 && identical(sort(sq$tax_filt$taxonID), sq$indistinguishables))) {
+    if(sq$j == 1) sq$tax_filt <- filter_tax(gsub('_', ' ', sq$values), r$tax_data[[1]])
+    ordered_keys <- rankorder[rankorder %in% colnames(a[[r$parsed[[q$i]]$which_df]])]
+    current_taxonomy <- a[[r$parsed[[q$i]]$which_df]][sq$i,ordered_keys]
+    previous_ranknums <- which(!is.na(current_taxonomy))
+    current_taxonomy <- current_taxonomy[previous_ranknums]    
+    if(length(current_taxonomy) > 0) {
+      current_ranknum <- match(r$parsed[[q$i]]$keys[[sq$j]], ordered_keys)
+      identified <- previous_ranknums[current_taxonomy != 'unidentifiable']
+      if(length(identified) > 0) {
+        # If any previous ranks were identifiable, use the most precise one to further filter options
+        lowest_identified <- min(identified)
+        sq$tax_filt <- filter_tax(gsub('_', ' ', current_taxonomy[ordered_keys[lowest_identified]]), sq$tax_filt)
+      }
+      unidentified <- previous_ranknums[current_taxonomy == 'unidentifiable']
+      if(length(unidentified) > 0) {
+        highest_unidentifiable <- max(unidentified)
+        if(highest_unidentifiable > current_ranknum || all(!duplicated(sq$tax_filt$parentNameUsageID[sq$tax_filt$taxonRank == ordered_keys[[highest_unidentifiable]]]))) {
           # If any previous unidentifiable ranks were higher than the current one, then it is too 
-          # Or, if all the current options were already indistinguishable in other iterations, then the current rank is also unidentifiable
+          # Or, if all the current options have 1:1 correspondence with previously indistinguishable taxa (e.g. each previously indistinguishable genus belonged to a separate family), then the current rank is also unidentifiable
           sq$values <- 'unidentifiable'
           return()
         }
       }
     }
-    values <- sq$tax_filt$canonicalName[sq$tax_filt$taxonRank == keys[[sq$j]]]
+    values <- sort(sq$tax_filt$canonicalName[sq$tax_filt$taxonRank == r$parsed[[q$i]]$keys[[sq$j]]])
     if(length(values) == 0) {
       sq$values <- NA
     } else if(length(values) == 1) {

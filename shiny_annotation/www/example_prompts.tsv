@@ -4,12 +4,12 @@ point_coordinates	benthic_invert	Click each coral or other benthic invert	photo_
 growth_form	boulder,branching,plates,meandroid,solitary,encrusting,fleshy	What is the growth form of the highlighted invert?	observation_type:benthic_invert
 taxonomy:genus,species,family,order,class,phylum	coral_traits:canonicalName	To what {key} does this belong?	growth_form:boulder,branching,plates,meandroid,solitary
 species	Millepora complanata,Millepora alcicornis	To what species does this belong?	growth_form:encrusting
-phylum	Cnidaria,Porifera,Bryozoa,Chordata	To what {key} does this belong?	growth_form:fleshy
-class	Calcarea,Demospongiae	To what {key} does this belong?	phylum:Porifera
-class	Ascidiacea	To what {key} does this belong?	observation_type:benthic_invert;phylum:Chordata
+phylum	Cnidaria,Porifera,Bryozoa,Chordata,other	To what phylum does this belong?	growth_form:fleshy
+class	Calcarea,Demospongiae	To what class does this belong?	phylum:Porifera
+class	Ascidiacea	To what class does this belong?	observation_type:benthic_invert;phylum:Chordata
 disease_type	none,black band disease,white band disease,bleaching,dead,other,unknown	Does the highlighted invert show signs of disease?	observation_type:benthic_invert
 point_coordinates	algae	Click each macroalgae	photo_type:benthic,landscape,specimen
-genus	Sargassum,Dictyota,Halimeda	To what genus does this belong?	observation_type:algae
+genus	Sargassum,Dictyota,Halimeda,other,unidentifiable	To what genus does this belong?	observation_type:algae
 box_coordinates	fish	Drag a box around each fish or group of fish	photo_type:benthic,landscape,specimen
 taxonomy:order,family,class,phylum	fish_list:canonicalName	To what {key} does this belong?	observation_type:fish
 taxonomy:species,genus	fish_list:canonicalName	To what {key} does this belong?	family:Pomacentridae

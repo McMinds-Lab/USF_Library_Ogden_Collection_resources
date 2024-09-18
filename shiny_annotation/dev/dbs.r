@@ -10,7 +10,7 @@ bb <- read.table('~/raw_data/taxonomy/gbif_backbone_accepted_living.tsv', header
 gbif_carib <- read.table('~/raw_data/taxonomy/0018230-240906103802322.csv', header = TRUE, sep = '\t', comment.char='', quote='')
 gbif_carib <- gbif_carib[order(gbif_carib$numberOfOccurrences, decreasing = TRUE),]
 gbif_carib <- gbif_carib[gbif_carib$taxonomicStatus == 'ACCEPTED' & gbif_carib$taxonRank == 'SPECIES',]
-# gbif_carib <- gbif_carib[gbif_carib$numberOfOccurrences > 10,]
+gbif_carib <- gbif_carib[gbif_carib$numberOfOccurrences > 10,]
 
 # Get full list of valid and living Caribbean species names by cross-checking with pre-filtered backbone
 caribspec <- unique(gbif_carib$species)
