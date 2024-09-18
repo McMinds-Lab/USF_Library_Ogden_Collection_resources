@@ -79,6 +79,8 @@ server <- function(input, output, session) {
   # temporary output directory
   tmpdir <- file.path(tempdir(), as.integer(Sys.time()))
   dir.create(tmpdir)
+  dir.create(file.path(tmpdir,'inputs'))
+  dir.create(file.path(tmpdir,'outputs'))
   # custom formatting for tsv output
   write.tsv <- \(o,f) write.table(o, f, quote = FALSE, sep = '\t', row.names = FALSE)
   # slightly shorter to use variable
@@ -801,9 +803,14 @@ server <- function(input, output, session) {
   }
   
   begin <- function() {
-    file.copy(r$prompts_file$datapath, tmpdir)
-    oldname_cleaned <- sub('_prefiltered', '', sub('\\..[^\\.]*$', '', r$tax_files[[1]]$name))
-    write.tsv(r$tax_data[[1]], file.path(tmpdir, paste0(oldname_cleaned, '_pre-filtered.tsv')))
+    file.copy(r$prompts_file$datapath, file.path(tmpdir, 'inputs'))
+    for(i in seq_along(r$values_files)) {
+      file.copy(r$values_files[[i]]$datapath, file.path(tmpdir, 'inputs'))
+    }
+    for(i in seq_along(r$tax_files)) {
+      oldname_cleaned <- sub('_prefiltered', '', sub('\\..[^\\.]*$', '', r$tax_files[[i]]$name))
+      write.tsv(r$tax_data[[i]], file.path(tmpdir, 'inputs', paste0(oldname_cleaned, '_pre-filtered.tsv')))
+    }
     r$metadata$session_start_time <- format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z")
     r$last_save_time <- Sys.time()
     a$i <- 1
@@ -925,7 +932,7 @@ server <- function(input, output, session) {
       r$last_save_time <- Sys.time()
       
       # Write the multiple outputs in a temporary directory
-      write.tsv(r$annotations,  file.path(tmpdir, 'photo_annotations.tsv'))
+      write.tsv(r$annotations,  file.path(tmpdir, 'outputs', 'photo_annotations.tsv'))
 
       # Create some pre-merged files if there are within-photo observations
       if(nrow(r$observations) > 0) {
@@ -938,16 +945,16 @@ server <- function(input, output, session) {
             merged_wide[row,key] <- paste(r$observations[idx,key], collapse=';')
           }
         }
-        write.tsv(r$observations, file.path(tmpdir, 'within_photo_observations.tsv'))
-        write.tsv(merged_long,    file.path(tmpdir, 'merged_long.tsv'))
-        write.tsv(merged_wide,    file.path(tmpdir, 'merged_wide.tsv'))
+        write.tsv(r$observations, file.path(tmpdir, 'outputs', 'within_photo_observations.tsv'))
+        write.tsv(merged_long,    file.path(tmpdir, 'outputs', 'merged_long.tsv'))
+        write.tsv(merged_wide,    file.path(tmpdir, 'outputs', 'merged_wide.tsv'))
       }
       
       # Serve a single .zip file with all the files
-      zip(
+      zip::zip(
         zipfile = file,
         files   = list.files(tmpdir, full.names = TRUE),
-        flags   = '-j'  # just include the files themselves
+        mode    = "cherry-pick"
       )
     }
   )
