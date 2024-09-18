@@ -1,0 +1,20 @@
+ID	ECO_CODE	ECOREGION	PROV_CODE	PROVINCE	RLM_CODE	REALM	ALT_CODE	ECO_CODE_X	Lat_Zone
+1	20062	Bermuda	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	67	62	Tropical
+1	25042	Carolinian	6	Warm Temperate Northwest Atlantic	2	Temperate Northern Atlantic	21	42	Temperate
+1	20043	Northern Gulf of Mexico	6	Warm Temperate Northwest Atlantic	2	Temperate Northern Atlantic	20	43	Temperate
+1	20069	Southern Gulf of Mexico	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	72	69	Tropical
+1	20070	Floridian	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	69	70	Tropical
+1	20063	Bahamian	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	66	63	Tropical
+1	20068	Western Caribbean	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	74	68	Tropical
+1	20065	Greater Antilles	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	70	65	Tropical
+1	20064	Eastern Caribbean	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	68	64	Tropical
+1	20067	Southwestern Caribbean	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	73	67	Tropical
+1	20066	Southern Caribbean	12	Tropical Northwestern Atlantic	4	Tropical Atlantic	71	66	Tropical
+1	20071	Guianan	13	North Brazil Shelf	4	Tropical Atlantic	65	71	Tropical
+1	20072	Amazonia	13	North Brazil Shelf	4	Tropical Atlantic	64	72	Tropical
+1	20075	Northeastern Brazil	14	Tropical Southwestern Atlantic	4	Tropical Atlantic	61	75	Tropical
+1	20074	Fernando de Naronha and Atoll das Rocas	14	Tropical Southwestern Atlantic	4	Tropical Atlantic	60	74	Tropical
+1	20073	Sao Pedro and Sao Paulo Islands	14	Tropical Southwestern Atlantic	4	Tropical Atlantic	62	73	Tropical
+1	20076	Eastern Brazil	14	Tropical Southwestern Atlantic	4	Tropical Atlantic	59	76	Tropical
+1	20077	Trindade and Martin Vaz Islands	14	Tropical Southwestern Atlantic	4	Tropical Atlantic	63	77	Tropical
+1	20180	Southeastern Brazil	47	Warm Temperate Southwestern Atlantic	9	Temperate South America	183	180	Temperate
