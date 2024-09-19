@@ -551,8 +551,8 @@ server <- function(input, output, session) {
     req(a$i)
     paste0(
       'Prompts file (', nrow(r$prompts), ' prompts): ', r$prompts_file$name, '\n',
-      if(length(r$values_files) > 0) paste0('Values files', paste(sapply(seq_along(r$values_files), \(i) paste0('(', names(r$values_files)[[i]], '): ', r$values_files[[i]]$name)), collapse = '\n'), '\n'),
-      if(length(r$tax_files) > 0) paste0('Taxonomy file (', names(r$tax_files)[[1]], '): ', r$tax_files[[1]]$name, '\n'),
+      if(length(r$values_files) > 0) paste0('Values files:\n',   paste(sapply(seq_along(r$values_files), \(i) paste0('  ', names(r$values_files)[[i]], ': ', r$values_files[[i]]$name)), collapse = '\n'), '\n'),
+      if(length(r$tax_files)    > 0) paste0('Taxonomy files:\n', paste(sapply(seq_along(r$tax_files),    \(i) paste0('  ', names(r$tax_files)[[i]],    ': ', r$tax_files[[i]]$name)),    collapse = '\n'), '\n'),
       nrow(r$photo_df), ' photos\n',
       ifelse(is.null(input$resume_file$datapath), 
              'No old annotations - starting from scratch!\n', 
