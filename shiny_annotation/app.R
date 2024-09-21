@@ -760,11 +760,19 @@ server <- function(input, output, session) {
     } else {
       # Grab values from file and pre-filter based on previous annotations
       df <- r$values_data[[r$parsed[[q$i]]$vf_name]]
-      old_answers <- a[[r$parsed[[q$i]]$which_df]][sq$i,,drop=FALSE]
-      old_answers <- old_answers[,!is.na(old_answers[1,]) & colnames(old_answers) %in% colnames(df), drop=FALSE]
+      old_answers <- a[[r$parsed[[q$i]]$which_df]][sq$i,, drop = FALSE]
+      old_answers <- old_answers[,!is.na(old_answers[1,]) & colnames(old_answers) %in% colnames(df), drop = FALSE]
       if(ncol(old_answers) > 0) {
         shared <- intersect(colnames(old_answers), colnames(df))
-        df <- df[apply(df[,shared,drop=FALSE],1,\(x) all(x == old_answers[,shared,drop=FALSE], na.rm=TRUE)),,drop=FALSE]
+        keepers <- apply(df[,shared, drop = FALSE],
+                         1,
+                         \(x) {
+                           # split values in row of values file
+                           splits <- strsplit(as.character(x), ',')
+                           # if every shared column has at least one match
+                           all(sapply(seq_along(x), \(y) any(splits[[y]] %in% old_answers[[y]])))
+                         })
+        df <- df[keepers,, drop = FALSE]
       }
       sq$values <- df[,r$parsed[[q$i]]$values]
     }
