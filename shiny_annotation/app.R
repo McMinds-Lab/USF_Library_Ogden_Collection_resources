@@ -491,6 +491,14 @@ server <- function(input, output, session) {
 
   output$current_photo <- renderImage({
     req(r$photos_not_done, a$i)
+    try({
+      # if a photo is in TIFF format, this will convert it so it can be displayed
+      png::writePNG(
+        tiff::readTIFF(r$photos_not_done$datapath[[a$i]]),
+        target = file.path(tmpdir, "current_photo.png")
+      )
+      r$photos_not_done$datapath[[a$i]] <- file.path(tmpdir, "current_photo.png")
+    }, silent=TRUE)
     list(src = r$photos_not_done$datapath[[a$i]])
   }, deleteFile = FALSE)
   
@@ -959,6 +967,7 @@ server <- function(input, output, session) {
       }
       
       # Serve a single .zip file with all the files
+      if(file.exists(file.path(tmpdir, "current_photo.png"))) file.remove(file.path(tmpdir, "current_photo.png"))
       zip::zip(
         zipfile = file,
         files   = list.files(tmpdir, full.names = TRUE),
